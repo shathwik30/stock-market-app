@@ -376,7 +376,14 @@ export default function PortfolioManagementPage() {
                 <PieChart className="w-7 h-7 text-violet-500" />
               </div>
               <div>
-                <h1 className="text-3xl md:text-4xl font-display font-bold text-foreground">
+                <h1 className={`text-3xl md:text-4xl font-display font-bold ${
+                  activeTab === 'Bull Market' ? 'text-[#00FF00]' :
+                  activeTab === 'Bullish to Bearish' ? 'text-[#FF00FF]' :
+                  activeTab === 'Side Ways Market' ? 'text-[#FFA500]' :
+                  activeTab === 'Bear Market' ? 'text-[#FF0000]' :
+                  activeTab === 'Bearish to Bullish' ? 'text-[#0000FF]' :
+                  'text-foreground'
+                }`}>
                   Portfolio Management
                 </h1>
                 <p className={`mt-1 font-semibold ${
