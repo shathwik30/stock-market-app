@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
 import { FileText, ArrowUpRight, ArrowDownRight, Clock, Activity, BarChart2, TrendingUp, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -299,13 +299,15 @@ type TradingType = 'intraday' | 'fno' | 'swing' | 'positional' | 'multibagger';
 export default function PaperTradingPage() {
   const router = useRouter();
   const { isAuthenticated } = useAuthStore();
+  const hydrated = useHasHydrated();
   const [activeTab, setActiveTab] = useState<TradingType>('intraday');
 
   useEffect(() => {
+    if (!hydrated) return;
     if (!isAuthenticated) {
       router.push('/login');
     }
-  }, [isAuthenticated, router]);
+  }, [hydrated, isAuthenticated, router]);
 
   const getActiveData = () => {
     switch (activeTab) {

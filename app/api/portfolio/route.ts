@@ -21,6 +21,8 @@ export async function GET(request: Request) {
 
     const portfolio = await Portfolio.findOne({ userId, marketCondition });
 
+    console.log('[Portfolio GET]', marketCondition, 'experienceNotes:', portfolio?.experienceNotes?.length ?? 'none');
+
     return NextResponse.json({
       success: true,
       portfolio: portfolio || null,
@@ -39,16 +41,18 @@ export async function PUT(request: Request) {
 
     const userId = await getUserIdFromToken();
 
-    const { marketCondition, strategies } = await validateRequest(
+    const { marketCondition, totalCapital, strategies, experienceNotes } = await validateRequest(
       request,
       updatePortfolioSchema
     );
 
     const portfolio = await Portfolio.findOneAndUpdate(
       { userId, marketCondition },
-      { strategies },
+      { $set: { totalCapital, strategies, experienceNotes } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
+
+    console.log('[Portfolio PUT] saved experienceNotes count:', experienceNotes?.length, 'returned:', portfolio?.experienceNotes?.length);
 
     return NextResponse.json({
       success: true,

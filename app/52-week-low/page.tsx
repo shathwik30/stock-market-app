@@ -2,17 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
 import TopGainersLosersTable from '@/components/TopGainersLosersTable';
 import { fiftyTwoWeekLowNSE, TopGainerLoserStock } from '@/lib/mockData';
 
 export default function FiftyTwoWeekLowPage() {
     const router = useRouter();
     const { isAuthenticated } = useAuthStore();
+    const hydrated = useHasHydrated();
     const [stocks, setStocks] = useState<TopGainerLoserStock[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        if (!hydrated) return;
         if (!isAuthenticated) {
             router.push('/login');
             return;
@@ -21,7 +23,7 @@ export default function FiftyTwoWeekLowPage() {
         // Using the new mock data directly
         setStocks(fiftyTwoWeekLowNSE);
         setLoading(false);
-    }, [isAuthenticated, router]);
+    }, [hydrated, isAuthenticated, router]);
 
     if (loading) {
         return (

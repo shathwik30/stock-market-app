@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
 import { LoadingSpinner } from './LoadingSpinner';
 
 interface AuthGuardProps {
@@ -13,22 +13,15 @@ interface AuthGuardProps {
 export function AuthGuard({ children, loadingMessage = 'Loading...' }: AuthGuardProps) {
   const router = useRouter();
   const { isAuthenticated } = useAuthStore();
-  const [isChecking, setIsChecking] = useState(true);
+  const hasHydrated = useHasHydrated();
 
   useEffect(() => {
-    // Small delay to allow hydration
-    const timer = setTimeout(() => {
-      if (!isAuthenticated) {
-        router.push('/login');
-      } else {
-        setIsChecking(false);
-      }
-    }, 0);
+    if (hasHydrated && !isAuthenticated) {
+      router.push('/login');
+    }
+  }, [hasHydrated, isAuthenticated, router]);
 
-    return () => clearTimeout(timer);
-  }, [isAuthenticated, router]);
-
-  if (isChecking || !isAuthenticated) {
+  if (!hasHydrated || !isAuthenticated) {
     return <LoadingSpinner message={loadingMessage} />;
   }
 

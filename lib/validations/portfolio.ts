@@ -22,9 +22,16 @@ export const getPortfolioSchema = z.object({
   marketCondition: marketConditionSchema,
 });
 
+export const experienceNoteSchema = z.object({
+  positive: z.string().default(''),
+  negative: z.string().default(''),
+});
+
 export const updatePortfolioSchema = z.object({
   marketCondition: marketConditionSchema,
+  totalCapital: z.number().min(0).default(100000),
   strategies: z.array(strategySchema).min(1, 'At least one strategy is required'),
+  experienceNotes: z.array(experienceNoteSchema).optional().default([]),
 });
 
 export type MarketCondition = z.infer<typeof marketConditionSchema>;

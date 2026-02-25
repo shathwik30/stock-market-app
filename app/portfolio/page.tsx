@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
 import { Briefcase, TrendingUp, FileText, ArrowRight, PieChart } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
@@ -61,12 +61,14 @@ const portfolioOptions = [
 export default function PortfolioPage() {
   const router = useRouter();
   const { isAuthenticated } = useAuthStore();
+  const hydrated = useHasHydrated();
 
   useEffect(() => {
+    if (!hydrated) return;
     if (!isAuthenticated) {
       router.push('/login');
     }
-  }, [isAuthenticated, router]);
+  }, [hydrated, isAuthenticated, router]);
 
   return (
     <div className="min-h-screen bg-background">

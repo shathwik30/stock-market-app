@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useEffect, useState } from 'react';
 
 interface User {
   id: string;
@@ -49,3 +50,28 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+
+/**
+ * Hook that returns true only after Zustand has finished hydrating from localStorage.
+ * Use this before checking isAuthenticated to avoid false redirects on page refresh.
+ */
+export function useHasHydrated() {
+  const [hasHydrated, setHasHydrated] = useState(false);
+
+  useEffect(() => {
+    const unsub = useAuthStore.persist.onFinishHydration(() => {
+      setHasHydrated(true);
+    });
+
+    // If already hydrated (e.g. store was created before this component mounted)
+    if (useAuthStore.persist.hasHydrated()) {
+      setHasHydrated(true);
+    }
+
+    return () => {
+      unsub();
+    };
+  }, []);
+
+  return hasHydrated;
+}

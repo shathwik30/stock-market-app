@@ -19,8 +19,8 @@ export const config = {
       }
       return secret;
     },
-    accessExpiry: '1h',
-    refreshExpiry: '7d',
+    accessExpiry: '30d',
+    refreshExpiry: '365d',
   },
   mongodb: {
     get uri(): string {

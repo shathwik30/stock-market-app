@@ -3,9 +3,8 @@
 import { useState, useEffect } from 'react';
 import { Eye, Trash2, Plus, Edit2, TrendingUp, Clock, Activity, BarChart2, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
-import axios from 'axios';
 import toast from 'react-hot-toast';
-import { useAuthStore } from '@/store/useAuthStore';
+import apiClient from '@/lib/api-client';
 import { AuthGuard, LoadingSpinner, PageHeader } from '@/components/common';
 import type { WatchlistCategory } from '@/models/Watchlist';
 
@@ -36,7 +35,6 @@ const tabs = [
 ];
 
 function WatchlistContent() {
-  const { accessToken } = useAuthStore();
   const [activeTab, setActiveTab] = useState<WatchlistCategory>('intraday');
   const [allStocks, setAllStocks] = useState<WatchlistStock[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,9 +46,7 @@ function WatchlistContent() {
 
   const fetchWatchlist = async () => {
     try {
-      const response = await axios.get('/api/watchlist', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const response = await apiClient.get('/api/watchlist');
       const stocks = response.data.watchlist?.stocks || [];
       setAllStocks(
         stocks.map((stock: WatchlistStock & { date: string }) => ({
@@ -67,8 +63,7 @@ function WatchlistContent() {
 
   const handleRemove = async (stockId: string) => {
     try {
-      await axios.delete('/api/watchlist', {
-        headers: { Authorization: `Bearer ${accessToken}` },
+      await apiClient.delete('/api/watchlist', {
         data: { stockId },
       });
       setAllStocks((prev) => prev.filter((s) => s._id !== stockId));

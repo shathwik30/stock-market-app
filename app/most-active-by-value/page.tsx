@@ -2,17 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
 import TopGainersLosersTable from '@/components/TopGainersLosersTable';
 import { mostActiveByValueNSE, TopGainerLoserStock } from '@/lib/mockData';
 
 export default function MostActiveByValuePage() {
     const router = useRouter();
     const { isAuthenticated } = useAuthStore();
+    const hydrated = useHasHydrated();
     const [stocks, setStocks] = useState<TopGainerLoserStock[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        if (!hydrated) return;
         if (!isAuthenticated) {
             router.push('/login');
             return;
@@ -20,7 +22,7 @@ export default function MostActiveByValuePage() {
 
         setStocks(mostActiveByValueNSE);
         setLoading(false);
-    }, [isAuthenticated, router]);
+    }, [hydrated, isAuthenticated, router]);
 
     if (loading) {
         return (

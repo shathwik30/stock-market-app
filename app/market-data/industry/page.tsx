@@ -2,20 +2,22 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
 import MarketDataTabbedView from '@/components/MarketDataTabbedView';
 
 export default function IndustryPage() {
   const router = useRouter();
   const { isAuthenticated } = useAuthStore();
+  const hydrated = useHasHydrated();
 
   useEffect(() => {
+    if (!hydrated) return;
     if (!isAuthenticated) {
       router.push('/login');
     }
-  }, [isAuthenticated, router]);
+  }, [hydrated, isAuthenticated, router]);
 
-  if (!isAuthenticated) {
+  if (!hydrated || !isAuthenticated) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
+import apiClient from '@/lib/api-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Plus,
@@ -44,7 +45,8 @@ const getColorClasses = (colorName: string) => {
 
 export default function NotesPage() {
     const router = useRouter();
-    const { isAuthenticated, accessToken } = useAuthStore();
+    const { isAuthenticated } = useAuthStore();
+    const hydrated = useHasHydrated();
     const [notes, setNotes] = useState<Note[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -59,23 +61,19 @@ export default function NotesPage() {
     const [tagInput, setTagInput] = useState('');
 
     useEffect(() => {
+        if (!hydrated) return;
         if (!isAuthenticated) {
             router.push('/login');
             return;
         }
         fetchNotes();
-    }, [isAuthenticated, router]);
+    }, [hydrated, isAuthenticated, router]);
 
     const fetchNotes = async () => {
         try {
-            const response = await fetch('/api/notes', {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                },
-            });
-            const data = await response.json();
-            if (data.success) {
-                setNotes(data.notes);
+            const response = await apiClient.get('/api/notes');
+            if (response.data.success) {
+                setNotes(response.data.notes);
             }
         } catch (error) {
             toast.error('Failed to fetch notes');
@@ -93,29 +91,20 @@ export default function NotesPage() {
         }
 
         try {
-            const url = '/api/notes';
-            const method = editingNote ? 'PUT' : 'POST';
             const body = editingNote
                 ? { _id: editingNote._id, ...formData }
                 : formData;
 
-            const response = await fetch(url, {
-                method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${accessToken}`,
-                },
-                body: JSON.stringify(body),
-            });
+            const response = editingNote
+                ? await apiClient.put('/api/notes', body)
+                : await apiClient.post('/api/notes', body);
 
-            const data = await response.json();
-
-            if (data.success) {
+            if (response.data.success) {
                 toast.success(editingNote ? 'Note updated!' : 'Note created!');
                 fetchNotes();
                 closeModal();
             } else {
-                toast.error(data.message);
+                toast.error(response.data.message);
             }
         } catch (error) {
             toast.error('Something went wrong');
@@ -126,22 +115,15 @@ export default function NotesPage() {
         if (!confirm('Are you sure you want to delete this note?')) return;
 
         try {
-            const response = await fetch('/api/notes', {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${accessToken}`,
-                },
-                body: JSON.stringify({ _id: noteId }),
+            const response = await apiClient.delete('/api/notes', {
+                data: { _id: noteId },
             });
 
-            const data = await response.json();
-
-            if (data.success) {
+            if (response.data.success) {
                 toast.success('Note deleted');
                 setNotes(notes.filter(n => n._id !== noteId));
             } else {
-                toast.error(data.message);
+                toast.error(response.data.message);
             }
         } catch (error) {
             toast.error('Failed to delete note');
@@ -150,18 +132,12 @@ export default function NotesPage() {
 
     const handleTogglePin = async (note: Note) => {
         try {
-            const response = await fetch('/api/notes', {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${accessToken}`,
-                },
-                body: JSON.stringify({ _id: note._id, isPinned: !note.isPinned }),
+            const response = await apiClient.put('/api/notes', {
+                _id: note._id,
+                isPinned: !note.isPinned,
             });
 
-            const data = await response.json();
-
-            if (data.success) {
+            if (response.data.success) {
                 toast.success(note.isPinned ? 'Unpinned' : 'Pinned!');
                 fetchNotes();
             }
@@ -232,7 +208,7 @@ export default function NotesPage() {
         });
     };
 
-    if (!isAuthenticated) return null;
+    if (!hydrated || !isAuthenticated) return null;
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">

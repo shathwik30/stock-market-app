@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/useAuthStore';
-import axios from 'axios';
 import toast from 'react-hot-toast';
+import apiClient from '@/lib/api-client';
 import { TrendingUp, TrendingDown, Eye, Wallet, Activity, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -50,7 +50,7 @@ const itemVariants = {
 };
 
 function DashboardContent() {
-  const { user, accessToken } = useAuthStore();
+  const { user } = useAuthStore();
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -61,9 +61,7 @@ function DashboardContent() {
 
   const fetchStats = async () => {
     try {
-      const response = await axios.get('/api/stocks/stats', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const response = await apiClient.get('/api/stocks/stats');
       setStats(response.data.stats);
     } catch {
       toast.error('Failed to load statistics');
