@@ -123,6 +123,7 @@ export default function Navbar() {
       { href: '/market-data/indices-fno', label: 'Indices in F&O' },
       { href: '/market-data/broad-market-indices', label: 'Broad Market Indices' },
       { href: '/market-data/sectoral-indices', label: 'Sectoral Indices' },
+      { href: '/market-data/pre-open', label: 'Pre Open' },
       { href: '/market-data/stocks', label: 'Stocks' },
       { href: '/market-data/sectors-data', label: 'Sectors' },
       { href: '/market-data/industry', label: 'Industry' },
