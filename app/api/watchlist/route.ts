@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import Watchlist, { IWatchlistStock } from '@/models/Watchlist';
+import { prisma } from '@/lib/prisma';
 import { getUserIdFromToken } from '@/lib/auth';
 import {
   handleApiError,
   badRequest,
   notFound,
+  successResponse,
 } from '@/lib/api-response';
 import {
   validateRequest,
@@ -15,20 +15,21 @@ import {
 
 export async function GET() {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
-    let watchlist = await Watchlist.findOne({ userId });
+    let watchlist = await prisma.watchlist.findUnique({
+      where: { userId },
+      include: { stocks: true },
+    });
 
     if (!watchlist) {
-      watchlist = await Watchlist.create({ userId, stocks: [] });
+      watchlist = await prisma.watchlist.create({
+        data: { userId },
+        include: { stocks: true },
+      });
     }
 
-    return NextResponse.json({
-      success: true,
-      watchlist,
-    });
+    return successResponse({ watchlist });
   } catch (error) {
     return handleApiError(error);
   }
@@ -36,22 +37,28 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
     const stockData = await validateRequest(request, addStockSchema);
 
-    let watchlist = await Watchlist.findOne({ userId });
+    let watchlist = await prisma.watchlist.findUnique({
+      where: { userId },
+      include: { stocks: true },
+    });
 
     if (!watchlist) {
-      watchlist = await Watchlist.create({
-        userId,
-        stocks: [{ ...stockData, addedAt: new Date() }],
+      watchlist = await prisma.watchlist.create({
+        data: {
+          userId,
+          stocks: {
+            create: { ...stockData, addedAt: new Date() },
+          },
+        },
+        include: { stocks: true },
       });
     } else {
       const exists = watchlist.stocks.some(
-        (stock: IWatchlistStock) =>
+        (stock: { tradingSymbol: string; category: string }) =>
           stock.tradingSymbol === stockData.tradingSymbol &&
           stock.category === stockData.category
       );
@@ -60,15 +67,21 @@ export async function POST(request: Request) {
         return badRequest('Stock already in this watchlist category');
       }
 
-      watchlist.stocks.push({ ...stockData, addedAt: new Date() } as IWatchlistStock);
-      await watchlist.save();
+      await prisma.watchlistStock.create({
+        data: {
+          watchlistId: watchlist.id,
+          ...stockData,
+          addedAt: new Date(),
+        },
+      });
+
+      watchlist = await prisma.watchlist.findUnique({
+        where: { userId },
+        include: { stocks: true },
+      });
     }
 
-    return NextResponse.json({
-      success: true,
-      message: 'Stock added to watchlist',
-      watchlist,
-    });
+    return successResponse({ watchlist }, { message: 'Stock added to watchlist' });
   } catch (error) {
     if (error instanceof NextResponse) {
       return error;
@@ -79,34 +92,33 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
     const { stockId } = await validateRequest(request, removeStockSchema);
 
-    const watchlist = await Watchlist.findOne({ userId });
+    const watchlist = await prisma.watchlist.findUnique({
+      where: { userId },
+      include: { stocks: true },
+    });
 
     if (!watchlist) {
       return notFound('Watchlist not found');
     }
 
-    const stockIndex = watchlist.stocks.findIndex(
-      (stock: IWatchlistStock) => stock._id?.toString() === stockId
-    );
+    const stock = watchlist.stocks.find((s: { id: string }) => s.id === stockId);
 
-    if (stockIndex === -1) {
+    if (!stock) {
       return notFound('Stock not found in watchlist');
     }
 
-    watchlist.stocks.splice(stockIndex, 1);
-    await watchlist.save();
+    await prisma.watchlistStock.delete({ where: { id: stockId } });
 
-    return NextResponse.json({
-      success: true,
-      message: 'Stock removed from watchlist',
-      watchlist,
+    const updatedWatchlist = await prisma.watchlist.findUnique({
+      where: { userId },
+      include: { stocks: true },
     });
+
+    return successResponse({ watchlist: updatedWatchlist }, { message: 'Stock removed from watchlist' });
   } catch (error) {
     if (error instanceof NextResponse) {
       return error;

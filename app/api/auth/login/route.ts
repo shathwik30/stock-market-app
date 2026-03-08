@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import User from '@/models/User';
+import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import { createAccessToken, createRefreshToken } from '@/lib/auth';
 import { handleApiError, badRequest } from '@/lib/api-response';
@@ -8,11 +7,9 @@ import { validateRequest, loginSchema } from '@/lib/validations';
 
 export async function POST(request: Request) {
   try {
-    await connectDB();
-
     const { username, password } = await validateRequest(request, loginSchema);
 
-    const user = await User.findOne({ username });
+    const user = await prisma.user.findUnique({ where: { username } });
 
     if (!user) {
       return badRequest('Invalid credentials');
@@ -25,12 +22,12 @@ export async function POST(request: Request) {
     }
 
     const accessToken = createAccessToken({
-      userId: user._id.toString(),
+      userId: user.id,
       username: user.username,
     });
 
     const refreshToken = createRefreshToken({
-      userId: user._id.toString(),
+      userId: user.id,
     });
 
     return NextResponse.json(
@@ -40,7 +37,7 @@ export async function POST(request: Request) {
         accessToken,
         refreshToken,
         user: {
-          id: user._id.toString(),
+          id: user.id,
           username: user.username,
           email: user.email,
           firstName: user.firstName,

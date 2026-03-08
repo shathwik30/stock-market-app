@@ -91,7 +91,7 @@ export interface GetWatchlistResponse {
 }
 
 export interface AddStockRequest {
-  stock: Omit<IWatchlistStock, '_id' | 'addedAt'>;
+  stock: Omit<IWatchlistStock, 'id' | 'addedAt'>;
 }
 
 export interface AddStockResponse {
@@ -133,7 +133,7 @@ export interface CreateNoteResponse {
 }
 
 export interface UpdateNoteRequest {
-  _id: string;
+  id: string;
   title?: string;
   content?: string;
   color?: INote['color'];
@@ -148,7 +148,7 @@ export interface UpdateNoteResponse {
 }
 
 export interface DeleteNoteRequest {
-  _id: string;
+  id: string;
 }
 
 export interface DeleteNoteResponse {

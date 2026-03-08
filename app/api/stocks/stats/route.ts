@@ -1,43 +1,36 @@
 import { NextResponse } from 'next/server';
-import { topGainersData, topLosersData } from '@/lib/mockData';
 import { getUserIdFromToken } from '@/lib/auth';
 import { handleApiError } from '@/lib/api-response';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    // Verify authentication
     await getUserIdFromToken();
 
-    const totalGainers = topGainersData.length;
-    const totalLosers = topLosersData.length;
+    // Fetch live stats from our own market API (reuses its 25s cache)
+    const baseUrl = new URL(request.url).origin;
+    const res = await fetch(`${baseUrl}/api/market/live?exchange=NSE`, {
+      headers: { 'Cache-Control': 'no-cache' },
+    });
 
-    const avgGain =
-      totalGainers > 0
-        ? topGainersData.reduce((sum, stock) => sum + stock.percentInChange, 0) / totalGainers
-        : 0;
+    if (!res.ok) {
+      return NextResponse.json(
+        { success: true, stats: { totalGainers: 0, totalLosers: 0, avgGain: 0, avgLoss: 0, topGainer: null, topLoser: null } },
+      );
+    }
 
-    const avgLoss =
-      totalLosers > 0
-        ? topLosersData.reduce((sum, stock) => sum + stock.percentInChange, 0) / totalLosers
-        : 0;
+    const data = await res.json();
 
-    const topGainer = topGainersData[0] || null;
-    const topLoser = topLosersData[0] || null;
-
-    return NextResponse.json(
-      {
-        success: true,
-        stats: {
-          totalGainers,
-          totalLosers,
-          avgGain: parseFloat(avgGain.toFixed(2)),
-          avgLoss: parseFloat(avgLoss.toFixed(2)),
-          topGainer,
-          topLoser,
-        },
+    return NextResponse.json({
+      success: true,
+      stats: data.stats || {
+        totalGainers: 0,
+        totalLosers: 0,
+        avgGain: 0,
+        avgLoss: 0,
+        topGainer: null,
+        topLoser: null,
       },
-      { status: 200 }
-    );
+    });
   } catch (error) {
     return handleApiError(error);
   }

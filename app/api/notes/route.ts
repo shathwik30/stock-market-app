@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb';
-import Note from '@/models/Note';
+import { prisma } from '@/lib/prisma';
 import { getUserIdFromToken } from '@/lib/auth';
 import {
   handleApiError,
   notFound,
   created,
+  successResponse,
 } from '@/lib/api-response';
 import {
   validateRequest,
@@ -16,18 +16,14 @@ import {
 
 export async function GET() {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
-    const notes = await Note.find({ userId })
-      .sort({ isPinned: -1, updatedAt: -1 })
-      .lean();
-
-    return NextResponse.json({
-      success: true,
-      notes,
+    const notes = await prisma.note.findMany({
+      where: { userId },
+      orderBy: [{ isPinned: 'desc' }, { updatedAt: 'desc' }],
     });
+
+    return successResponse({ notes });
   } catch (error) {
     return handleApiError(error);
   }
@@ -35,8 +31,6 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
     const { title, content, color, tags } = await validateRequest(
@@ -44,13 +38,15 @@ export async function POST(request: Request) {
       createNoteSchema
     );
 
-    const note = await Note.create({
-      userId,
-      title,
-      content,
-      color,
-      tags,
-      isPinned: false,
+    const note = await prisma.note.create({
+      data: {
+        userId,
+        title,
+        content,
+        color,
+        tags,
+        isPinned: false,
+      },
     });
 
     return created({ note }, 'Note created');
@@ -64,34 +60,31 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
-    const { _id, title, content, color, isPinned, tags } = await validateRequest(
+    const { id, title, content, color, isPinned, tags } = await validateRequest(
       request,
       updateNoteSchema
     );
 
-    const note = await Note.findOne({ _id, userId });
+    const existing = await prisma.note.findFirst({ where: { id, userId } });
 
-    if (!note) {
+    if (!existing) {
       return notFound('Note not found');
     }
 
-    if (title !== undefined) note.title = title;
-    if (content !== undefined) note.content = content;
-    if (color !== undefined) note.color = color;
-    if (isPinned !== undefined) note.isPinned = isPinned;
-    if (tags !== undefined) note.tags = tags;
-
-    await note.save();
-
-    return NextResponse.json({
-      success: true,
-      message: 'Note updated',
-      note,
+    const note = await prisma.note.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title }),
+        ...(content !== undefined && { content }),
+        ...(color !== undefined && { color }),
+        ...(isPinned !== undefined && { isPinned }),
+        ...(tags !== undefined && { tags }),
+      },
     });
+
+    return successResponse({ note }, { message: 'Note updated' });
   } catch (error) {
     if (error instanceof NextResponse) {
       return error;
@@ -102,22 +95,17 @@ export async function PUT(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    await connectDB();
-
     const userId = await getUserIdFromToken();
 
-    const { _id } = await validateRequest(request, deleteNoteSchema);
+    const { id } = await validateRequest(request, deleteNoteSchema);
 
-    const result = await Note.deleteOne({ _id, userId });
+    const result = await prisma.note.deleteMany({ where: { id, userId } });
 
-    if (result.deletedCount === 0) {
+    if (result.count === 0) {
       return notFound('Note not found');
     }
 
-    return NextResponse.json({
-      success: true,
-      message: 'Note deleted',
-    });
+    return successResponse(null, { message: 'Note deleted' });
   } catch (error) {
     if (error instanceof NextResponse) {
       return error;

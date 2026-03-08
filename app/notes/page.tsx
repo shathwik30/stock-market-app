@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuthStore, useHasHydrated } from '@/store/useAuthStore';
+import { AuthGuard } from '@/components/common';
 import apiClient from '@/lib/api-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -20,7 +19,7 @@ import {
 import toast from 'react-hot-toast';
 
 interface Note {
-    _id: string;
+    id: string;
     title: string;
     content: string;
     color: string;
@@ -44,9 +43,14 @@ const getColorClasses = (colorName: string) => {
 };
 
 export default function NotesPage() {
-    const router = useRouter();
-    const { isAuthenticated } = useAuthStore();
-    const hydrated = useHasHydrated();
+    return (
+        <AuthGuard loadingMessage="Loading notes...">
+            <NotesContent />
+        </AuthGuard>
+    );
+}
+
+function NotesContent() {
     const [notes, setNotes] = useState<Note[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -61,13 +65,8 @@ export default function NotesPage() {
     const [tagInput, setTagInput] = useState('');
 
     useEffect(() => {
-        if (!hydrated) return;
-        if (!isAuthenticated) {
-            router.push('/login');
-            return;
-        }
         fetchNotes();
-    }, [hydrated, isAuthenticated, router]);
+    }, []);
 
     const fetchNotes = async () => {
         try {
@@ -92,7 +91,7 @@ export default function NotesPage() {
 
         try {
             const body = editingNote
-                ? { _id: editingNote._id, ...formData }
+                ? { id: editingNote.id, ...formData }
                 : formData;
 
             const response = editingNote
@@ -116,12 +115,12 @@ export default function NotesPage() {
 
         try {
             const response = await apiClient.delete('/api/notes', {
-                data: { _id: noteId },
+                data: { id: noteId },
             });
 
             if (response.data.success) {
                 toast.success('Note deleted');
-                setNotes(notes.filter(n => n._id !== noteId));
+                setNotes(notes.filter(n => n.id !== noteId));
             } else {
                 toast.error(response.data.message);
             }
@@ -133,7 +132,7 @@ export default function NotesPage() {
     const handleTogglePin = async (note: Note) => {
         try {
             const response = await apiClient.put('/api/notes', {
-                _id: note._id,
+                id: note.id,
                 isPinned: !note.isPinned,
             });
 
@@ -207,8 +206,6 @@ export default function NotesPage() {
             year: 'numeric',
         });
     };
-
-    if (!hydrated || !isAuthenticated) return null;
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
@@ -297,7 +294,7 @@ export default function NotesPage() {
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                                     {pinnedNotes.map(note => (
                                         <NoteCard
-                                            key={note._id}
+                                            key={note.id}
                                             note={note}
                                             onEdit={openEditModal}
                                             onDelete={handleDelete}
@@ -323,7 +320,7 @@ export default function NotesPage() {
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                                     {unpinnedNotes.map(note => (
                                         <NoteCard
-                                            key={note._id}
+                                            key={note.id}
                                             note={note}
                                             onEdit={openEditModal}
                                             onDelete={handleDelete}
@@ -590,7 +587,7 @@ function NoteCard({
                     <button
                         onClick={e => {
                             e.stopPropagation();
-                            onDelete(note._id);
+                            onDelete(note.id);
                         }}
                         className="p-1.5 rounded-lg hover:bg-red-100 transition-colors"
                         title="Delete"

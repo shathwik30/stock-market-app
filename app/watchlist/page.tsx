@@ -6,10 +6,10 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import apiClient from '@/lib/api-client';
 import { AuthGuard, LoadingSpinner, PageHeader } from '@/components/common';
-import type { WatchlistCategory } from '@/models/Watchlist';
+import type { WatchlistCategory } from '@/types';
 
 interface WatchlistStock {
-  _id?: string;
+  id?: string;
   sNo: number;
   date: string;
   sourceFrom: string;
@@ -66,7 +66,7 @@ function WatchlistContent() {
       await apiClient.delete('/api/watchlist', {
         data: { stockId },
       });
-      setAllStocks((prev) => prev.filter((s) => s._id !== stockId));
+      setAllStocks((prev) => prev.filter((s) => s.id !== stockId));
       toast.success('Stock removed from watchlist');
     } catch {
       toast.error('Failed to remove stock');
@@ -208,7 +208,7 @@ function WatchlistContent() {
                 {stocks.map((stock, index) => {
                   return (
                     <motion.tr
-                      key={stock._id || stock.sNo}
+                      key={stock.id || stock.sNo}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.05 }}
@@ -267,14 +267,14 @@ function WatchlistContent() {
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
-                            onClick={() => stock._id && handleEdit(stock._id)}
+                            onClick={() => stock.id && handleEdit(stock.id)}
                             className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-md transition-all"
                             title="Edit"
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => stock._id && handleRemove(stock._id)}
+                            onClick={() => stock.id && handleRemove(stock.id)}
                             className="p-1.5 text-muted-foreground hover:text-error hover:bg-error/10 rounded-md transition-all"
                             title="Delete"
                           >

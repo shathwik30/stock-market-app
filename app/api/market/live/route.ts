@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { handleApiError } from '@/lib/api-response';
+
+// Allow up to 60s on Vercel Pro (cold start can be slow: scrip master download + historical load)
+export const maxDuration = 60;
 import { getScripMaster, deduplicateByIsin, ScripInfo } from '@/lib/dhan/scripMaster';
-import { getQuotesForSegment, QuoteData } from '@/lib/dhan/marketData';
+import { getQuotesMultiSegment, QuoteData } from '@/lib/dhan/marketData';
 import {
   ensureHistoricalLoaded,
   ensureSnapshotsLoaded,
@@ -72,42 +76,43 @@ export async function GET(request: NextRequest) {
   try {
     const exchange = (request.nextUrl.searchParams.get('exchange') || 'NSE') as 'NSE' | 'BSE' | 'Both';
 
-    // ── Fast path: serve from response cache ──
+    // -- Fast path: serve from response cache --
     const rc = responseCache[exchange];
     if (rc && Date.now() - rc.timestamp < RESP_CACHE_TTL) {
       return NextResponse.json(rc.json);
     }
 
-    // ── 1. Scrip master (from DB cache, <10ms) ──
+    // -- 1. Scrip master (from DB cache, <10ms) --
     let stocks = await getScripMaster(exchange);
     if (exchange === 'Both') stocks = deduplicateByIsin(stocks);
 
-    // ── 2. Load historical + snapshots from DB → memory (AWAIT — slow on cold start, instant after) ──
-    const segments = [...new Set(stocks.map((s) => s.exchangeSegment))];
-    await Promise.all([
-      ...segments.map((seg) => ensureHistoricalLoaded(seg)),
-      ensureSnapshotsLoaded(),
-    ]);
-
-    // ── 3. Fetch live quotes (uses per-segment cache — instant if recently fetched) ──
-    // Group stocks by segment
+    // -- 2. Group stocks by segment --
     const bySegment: Record<string, number[]> = {};
     for (const s of stocks) {
       if (!bySegment[s.exchangeSegment]) bySegment[s.exchangeSegment] = [];
       bySegment[s.exchangeSegment].push(s.securityId);
     }
+    const segments = Object.keys(bySegment);
 
-    // Fetch each segment (reuses cache if fresh)
-    const allQuotes = new Map<number, QuoteData>();
-    for (const [seg, ids] of Object.entries(bySegment)) {
-      const quotes = await getQuotesForSegment(seg as 'NSE_EQ' | 'BSE_EQ', ids);
-      for (const [id, q] of quotes.entries()) allQuotes.set(id, q);
-    }
+    // -- 3. Load historical + snapshots + quotes ALL IN PARALLEL --
+    const [, , allQuotes] = await Promise.all([
+      // Historical data from DB → memory (instant after first load)
+      Promise.all(segments.map((seg) => ensureHistoricalLoaded(seg))),
+      // Snapshot recovery from DB (cold start)
+      ensureSnapshotsLoaded(),
+      // Live quotes — parallel across segments
+      getQuotesMultiSegment(
+        segments.map((seg) => ({
+          segment: seg as 'NSE_EQ' | 'BSE_EQ',
+          securityIds: bySegment[seg],
+        }))
+      ),
+    ]);
 
-    // ── 3b. Store price snapshot for intraday calculations ──
+    // -- 4. Store price snapshot for intraday calculations --
     storeSnapshot(allQuotes);
 
-    // ── 4. Daily sync (fire-and-forget, no blocking) ──
+    // -- 5. Daily sync (fire-and-forget, no blocking) --
     for (const seg of segments) {
       const segQuotes = new Map<number, QuoteData>();
       for (const s of stocks.filter((st) => st.exchangeSegment === seg)) {
@@ -117,10 +122,10 @@ export async function GET(request: NextRequest) {
       syncDailyFromQuotes(segQuotes, seg).catch(() => {});
     }
 
-    // ── 5. Trigger background population for missing historical data ──
+    // -- 6. Trigger background population for missing historical data --
     startPopulation(stocks.map((s) => ({ securityId: s.securityId, exchangeSegment: s.exchangeSegment })));
 
-    // ── 6. Build response ──
+    // -- 7. Build response --
     const scripMap = new Map<number, ScripInfo>();
     stocks.forEach((s) => scripMap.set(s.securityId, s));
 
@@ -139,10 +144,39 @@ export async function GET(request: NextRequest) {
     losers.forEach((s, i) => (s.id = `${i + 1}`));
     unchanged.forEach((s, i) => (s.id = `${i + 1}`));
 
+    // -- 8. Compute stats for dashboard --
+    const avgGain = gainers.length > 0
+      ? Math.round(gainers.reduce((sum, s) => sum + s.percentChange, 0) / gainers.length * 100) / 100
+      : 0;
+    const avgLoss = losers.length > 0
+      ? Math.round(losers.reduce((sum, s) => sum + s.percentChange, 0) / losers.length * 100) / 100
+      : 0;
+
     const json = {
       gainers,
       losers,
       unchanged,
+      stats: {
+        totalGainers: gainers.length,
+        totalLosers: losers.length,
+        totalUnchanged: unchanged.length,
+        avgGain,
+        avgLoss,
+        topGainer: gainers[0] ? {
+          company: gainers[0].companyName,
+          symbol: gainers[0].tradingSymbol,
+          sector: gainers[0].sector,
+          ltp: gainers[0].cmp,
+          percentInChange: gainers[0].percentChange,
+        } : null,
+        topLoser: losers[0] ? {
+          company: losers[0].companyName,
+          symbol: losers[0].tradingSymbol,
+          sector: losers[0].sector,
+          ltp: losers[0].cmp,
+          percentInChange: losers[0].percentChange,
+        } : null,
+      },
       lastUpdated: new Date().toISOString(),
       totalStocks: all.length,
       historicalStatus: getPopulationStatus(),
@@ -152,9 +186,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(json);
   } catch (error) {
     console.error('Market API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch market data', details: error instanceof Error ? error.message : String(error) },
-      { status: 500 }
-    );
+    return handleApiError(error);
   }
 }

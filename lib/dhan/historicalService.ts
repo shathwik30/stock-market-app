@@ -1,10 +1,9 @@
-import connectDB from '@/lib/mongodb';
-import HistoricalPrice from '@/models/HistoricalPrice';
-import PriceSnapshot from '@/models/PriceSnapshot';
+import { prisma } from '@/lib/prisma';
 import { fetchHistoricalBatch, QuoteData } from './marketData';
 import getState from './globalState';
+import { randomUUID } from 'crypto';
 
-// ── Trading-day map ──
+// -- Trading-day map --
 const TD: Record<string, number> = {
   '1D': 1, '2D': 2, '3D': 3, '4D': 4, '5D': 5,
   '1W': 5, '2W': 10, '3W': 15, '4W': 20, '5W': 25,
@@ -24,7 +23,7 @@ function ckey(id: number, seg: string): string {
 }
 
 /**
- * Load historical data from MongoDB into globalThis memory — ONCE per segment.
+ * Load historical data from PostgreSQL into globalThis memory -- ONCE per segment.
  * Awaitable: concurrent callers share the same promise (no duplicate loads).
  */
 export async function ensureHistoricalLoaded(segment: string): Promise<void> {
@@ -34,11 +33,10 @@ export async function ensureHistoricalLoaded(segment: string): Promise<void> {
   if (!g.historicalLoadPromise[segment]) {
     g.historicalLoadPromise[segment] = (async () => {
       try {
-        await connectDB();
-        const docs = await HistoricalPrice.find(
-          { exchangeSegment: segment },
-          { securityId: 1, exchangeSegment: 1, closes: 1, timestamps: 1 }
-        ).lean();
+        const docs = await prisma.historicalPrice.findMany({
+          where: { exchangeSegment: segment },
+          select: { securityId: true, exchangeSegment: true, closes: true, timestamps: true },
+        });
 
         for (const d of docs) {
           g.historicalMem.set(ckey(d.securityId, d.exchangeSegment), {
@@ -61,7 +59,7 @@ export async function ensureHistoricalLoaded(segment: string): Promise<void> {
 
 /**
  * Background-populate stocks that have no historical data yet.
- * Runs once, stores in MongoDB + globalThis memory.
+ * Runs once, stores in PostgreSQL + globalThis memory.
  */
 export function startPopulation(
   items: { securityId: number; exchangeSegment: string }[]
@@ -86,14 +84,18 @@ export function startPopulation(
     now.toISOString().split('T')[0],
     (id, seg, data) => {
       g.historicalMem.set(ckey(id, seg), { closes: data.close, timestamps: data.timestamp });
-      // fire-and-forget DB persist
-      connectDB().then(() =>
-        HistoricalPrice.updateOne(
-          { securityId: id, exchangeSegment: seg },
-          { $set: { closes: data.close, timestamps: data.timestamp, lastDate: now.toISOString().split('T')[0] } },
-          { upsert: true }
-        ).catch(() => {})
-      );
+      // fire-and-forget DB persist using raw SQL upsert
+      const uuid = randomUUID();
+      prisma.$executeRawUnsafe(
+        `INSERT INTO "HistoricalPrice" (id, "securityId", "exchangeSegment", closes, timestamps, "lastDate", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4::double precision[], $5::double precision[], $6, NOW(), NOW())
+         ON CONFLICT ("securityId", "exchangeSegment") DO UPDATE SET
+           closes = $4::double precision[],
+           timestamps = $5::double precision[],
+           "lastDate" = $6,
+           "updatedAt" = NOW()`,
+        uuid, id, seg, data.close, data.timestamp, now.toISOString().split('T')[0]
+      ).catch(() => {});
     },
     (done, total) => {
       g.populationProgress = { completed: done, total };
@@ -106,15 +108,14 @@ export function startPopulation(
 
 /**
  * Daily sync: use live quotes to append today's close.
- * Zero Dhan historical API calls — just uses data we already have.
+ * Zero Dhan historical API calls -- just uses data we already have.
  */
 export async function syncDailyFromQuotes(
   quotes: Map<number, QuoteData>,
   segment: string
 ): Promise<void> {
   const g = getState();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const bulkOps: any[] = [];
+  const updates: { securityId: number; segment: string; close: number; ts: number; tradeDate: string }[] = [];
 
   for (const [id, q] of quotes.entries()) {
     const key = ckey(id, segment);
@@ -135,27 +136,32 @@ export async function syncDailyFromQuotes(
     hist.closes.push(q.last_price);
     hist.timestamps.push(ts);
 
-    bulkOps.push({
-      updateOne: {
-        filter: { securityId: id, exchangeSegment: segment },
-        update: { $push: { closes: q.last_price, timestamps: ts }, $set: { lastDate: tradeDate } },
-      },
-    });
+    updates.push({ securityId: id, segment, close: q.last_price, ts, tradeDate });
   }
 
-  if (bulkOps.length > 0) {
+  if (updates.length > 0) {
     try {
-      await connectDB();
-      for (let i = 0; i < bulkOps.length; i += 500) {
-        await HistoricalPrice.bulkWrite(bulkOps.slice(i, i + 500));
-      }
-      console.log(`[Hist] Daily sync: ${bulkOps.length} stocks updated for ${segment}`);
+      // Batch updates in a transaction
+      await prisma.$transaction(
+        updates.map((u) =>
+          prisma.$executeRawUnsafe(
+            `UPDATE "HistoricalPrice"
+             SET closes = array_cat(closes, ARRAY[$1::double precision]),
+                 timestamps = array_cat(timestamps, ARRAY[$2::double precision]),
+                 "lastDate" = $3,
+                 "updatedAt" = NOW()
+             WHERE "securityId" = $4 AND "exchangeSegment" = $5`,
+            u.close, u.ts, u.tradeDate, u.securityId, u.segment
+          )
+        )
+      );
+      console.log(`[Hist] Daily sync: ${updates.length} stocks updated for ${segment}`);
     } catch { /* ignore */ }
   }
 }
 
 /**
- * Load price snapshots from MongoDB into memory on cold start (Vercel serverless).
+ * Load price snapshots from PostgreSQL into memory on cold start (Vercel serverless).
  * Returns immediately if snapshots already exist in memory.
  */
 export async function ensureSnapshotsLoaded(): Promise<void> {
@@ -163,20 +169,17 @@ export async function ensureSnapshotsLoaded(): Promise<void> {
   if (g.priceSnapshots.length > 0) return;
 
   try {
-    await connectDB();
     const cutoff = new Date(Date.now() - 150 * 60 * 1000);
-    const docs = await PriceSnapshot.find(
-      { timestamp: { $gte: cutoff } },
-      { timestamp: 1, prices: 1 }
-    ).sort({ timestamp: 1 }).lean();
+    const docs = await prisma.priceSnapshot.findMany({
+      where: { timestamp: { gte: cutoff } },
+      orderBy: { timestamp: 'asc' },
+    });
 
     for (const doc of docs) {
       const prices = new Map<number, number>();
-      const raw = doc.prices as unknown;
-      if (raw instanceof Map) {
-        for (const [k, v] of raw) prices.set(parseInt(k), v as number);
-      } else if (raw && typeof raw === 'object') {
-        for (const [k, v] of Object.entries(raw as Record<string, number>)) {
+      const raw = doc.prices as Record<string, number>;
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
           prices.set(parseInt(k), v);
         }
       }
@@ -196,7 +199,7 @@ export async function ensureSnapshotsLoaded(): Promise<void> {
 
 /**
  * Store a price snapshot from live quotes. Called on every quote fetch.
- * Saves to memory (fast access) AND MongoDB (survives Vercel cold starts).
+ * Saves to memory (fast access) AND PostgreSQL (survives Vercel cold starts).
  * Keeps a rolling 2.5-hour window for intraday % change calculations.
  */
 export function storeSnapshot(quotes: Map<number, QuoteData>): void {
@@ -222,14 +225,19 @@ export function storeSnapshot(quotes: Map<number, QuoteData>): void {
     g.priceSnapshots.shift();
   }
 
-  // Persist to MongoDB (fire-and-forget — survives cold starts)
+  // Persist to PostgreSQL (fire-and-forget -- survives cold starts)
   const pricesObj: Record<string, number> = {};
   for (const [id, p] of prices.entries()) {
     pricesObj[String(id)] = p;
   }
-  connectDB().then(() =>
-    PriceSnapshot.create({ timestamp: new Date(now), prices: pricesObj })
-  ).catch(() => {});
+  prisma.priceSnapshot.create({
+    data: { timestamp: new Date(now), prices: pricesObj },
+  }).then(() => {
+    // Cleanup old snapshots (replaces TTL index)
+    prisma.priceSnapshot.deleteMany({
+      where: { timestamp: { lt: new Date(Date.now() - 10800000) } },
+    }).catch(() => {});
+  }).catch(() => {});
 }
 
 /** Find the price of a stock from the snapshot closest to `minutesAgo`. */
@@ -252,7 +260,7 @@ function getSnapshotPrice(securityId: number, minutesAgo: number): number | null
   return closest.prices.get(securityId) ?? null;
 }
 
-// Intraday intervals: column name → minutes ago
+// Intraday intervals: column name -> minutes ago
 const INTRADAY: [string, number][] = [
   ['% 5Min Chag', 5],
   ['% 15Min Chag', 15],

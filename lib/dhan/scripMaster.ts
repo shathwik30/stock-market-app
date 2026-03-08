@@ -1,6 +1,6 @@
 import axios from 'axios';
-import connectDB from '@/lib/mongodb';
-import StockMaster, { IStockMaster } from '@/models/StockMaster';
+import { prisma } from '@/lib/prisma';
+import { randomUUID } from 'crypto';
 
 export interface ScripInfo {
   securityId: number;
@@ -125,45 +125,49 @@ async function downloadScripMaster(
   return stocks;
 }
 
-// Persist scrip master to MongoDB
+// Persist scrip master to PostgreSQL using raw SQL batch upsert
 async function persistToDb(stocks: ScripInfo[]): Promise<void> {
   const now = new Date();
-  const bulkOps = stocks.map((s) => ({
-    updateOne: {
-      filter: { securityId: s.securityId, exchange: s.exchange },
-      update: {
-        $set: {
-          tradingSymbol: s.tradingSymbol,
-          displayName: s.displayName,
-          exchangeSegment: s.exchangeSegment,
-          series: s.series,
-          instrumentType: s.instrumentType,
-          isin: s.isin,
-          faceValue: s.faceValue,
-          refreshedAt: now,
-        },
-      },
-      upsert: true,
-    },
-  }));
+  const batchSize = 500;
 
-  // Batch bulkWrite in chunks of 1000
-  for (let i = 0; i < bulkOps.length; i += 1000) {
-    await StockMaster.bulkWrite(bulkOps.slice(i, i + 1000));
+  for (let i = 0; i < stocks.length; i += batchSize) {
+    const batch = stocks.slice(i, i + batchSize);
+
+    const values = batch.map((s) => {
+      const id = randomUUID();
+      return `('${id}', ${s.securityId}, '${s.tradingSymbol.replace(/'/g, "''")}', '${s.displayName.replace(/'/g, "''")}', '${s.exchange}', '${s.exchangeSegment}', '${s.series.replace(/'/g, "''")}', '${s.instrumentType}', '${s.isin}', ${s.faceValue}, '${now.toISOString()}'::timestamp, '${now.toISOString()}'::timestamp, '${now.toISOString()}'::timestamp)`;
+    }).join(',\n');
+
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "StockMaster" (id, "securityId", "tradingSymbol", "displayName", exchange, "exchangeSegment", series, "instrumentType", isin, "faceValue", "refreshedAt", "createdAt", "updatedAt")
+      VALUES ${values}
+      ON CONFLICT ("securityId", exchange) DO UPDATE SET
+        "tradingSymbol" = EXCLUDED."tradingSymbol",
+        "displayName" = EXCLUDED."displayName",
+        "exchangeSegment" = EXCLUDED."exchangeSegment",
+        series = EXCLUDED.series,
+        "instrumentType" = EXCLUDED."instrumentType",
+        isin = EXCLUDED.isin,
+        "faceValue" = EXCLUDED."faceValue",
+        "refreshedAt" = EXCLUDED."refreshedAt",
+        "updatedAt" = EXCLUDED."updatedAt"
+    `);
   }
+
   console.log(`[ScripMaster] Persisted ${stocks.length} stocks to DB`);
 }
 
-// Load from MongoDB
+// Load from PostgreSQL
 async function loadFromDb(exchange?: string): Promise<ScripInfo[]> {
-  const filter: Record<string, string> = {};
-  if (exchange && exchange !== 'Both') filter.exchange = exchange;
+  const where: Record<string, string> = {};
+  if (exchange && exchange !== 'Both') where.exchange = exchange;
 
-  const docs: IStockMaster[] = await StockMaster.find(filter)
-    .sort({ displayName: 1 })
-    .lean();
+  const docs = await prisma.stockMaster.findMany({
+    where,
+    orderBy: { displayName: 'asc' },
+  });
 
-  return docs.map((d) => ({
+  return docs.map((d: { securityId: number; tradingSymbol: string; displayName: string; exchange: string; exchangeSegment: string; series: string; instrumentType: string; isin: string; faceValue: number }) => ({
     securityId: d.securityId,
     tradingSymbol: d.tradingSymbol,
     displayName: d.displayName,
@@ -178,14 +182,16 @@ async function loadFromDb(exchange?: string): Promise<ScripInfo[]> {
 
 // Check if DB data is fresh enough
 async function isDbFresh(): Promise<boolean> {
-  const latest = await StockMaster.findOne().sort({ refreshedAt: -1 }).lean();
+  const latest = await prisma.stockMaster.findFirst({
+    orderBy: { refreshedAt: 'desc' },
+  });
   if (!latest?.refreshedAt) return false;
   return Date.now() - new Date(latest.refreshedAt).getTime() < DB_REFRESH_TTL;
 }
 
 /**
  * Get scrip master for the given exchange.
- * Uses in-memory cache → MongoDB → Dhan CSV (cascading fallback).
+ * Uses in-memory cache -> PostgreSQL -> Dhan CSV (cascading fallback).
  */
 export async function getScripMaster(exchange: 'NSE' | 'BSE' | 'Both' = 'NSE'): Promise<ScripInfo[]> {
   // 1) In-memory cache
@@ -193,9 +199,7 @@ export async function getScripMaster(exchange: 'NSE' | 'BSE' | 'Both' = 'NSE'): 
     return memCache[exchange].data;
   }
 
-  await connectDB();
-
-  // 2) Try MongoDB
+  // 2) Try PostgreSQL
   const dbFresh = await isDbFresh();
   if (dbFresh) {
     const stocks = await loadFromDb(exchange);

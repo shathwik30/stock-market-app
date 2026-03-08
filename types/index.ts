@@ -1,11 +1,9 @@
-import mongoose from 'mongoose';
-
 // =====================================
 // User Types
 // =====================================
 
 export interface IUser {
-  _id: mongoose.Types.ObjectId;
+  id: string;
   username: string;
   email: string;
   password: string;
@@ -43,8 +41,8 @@ export interface IStrategy {
 }
 
 export interface IPortfolio {
-  _id: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
+  id: string;
+  userId: string;
   marketCondition: MarketCondition;
   strategies: IStrategy[];
   createdAt: Date;
@@ -58,7 +56,7 @@ export interface IPortfolio {
 export type WatchlistCategory = 'intraday' | 'fno' | 'swing' | 'positional' | 'multibagger';
 
 export interface IWatchlistStock {
-  _id?: mongoose.Types.ObjectId;
+  id?: string;
   sNo: number;
   date: Date;
   sourceFrom: string;
@@ -77,8 +75,8 @@ export interface IWatchlistStock {
 }
 
 export interface IWatchlist {
-  _id: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
+  id: string;
+  userId: string;
   name: string;
   stocks: IWatchlistStock[];
   createdAt: Date;
@@ -92,8 +90,8 @@ export interface IWatchlist {
 export type NoteColor = 'slate' | 'zinc' | 'stone' | 'neutral' | 'gray' | 'dark';
 
 export interface INote {
-  _id: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
+  id: string;
+  userId: string;
   title: string;
   content: string;
   color: NoteColor;

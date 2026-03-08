@@ -1,5 +1,4 @@
-import connectDB from '@/lib/mongodb';
-import User from '@/models/User';
+import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import { created, handleApiError, badRequest } from '@/lib/api-response';
 import { validateRequest, registerSchema } from '@/lib/validations';
@@ -7,15 +6,13 @@ import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
   try {
-    await connectDB();
-
     const { username, email, password, firstName, lastName } = await validateRequest(
       request,
       registerSchema
     );
 
-    const existingUser = await User.findOne({
-      $or: [{ email }, { username }],
+    const existingUser = await prisma.user.findFirst({
+      where: { OR: [{ email }, { username }] },
     });
 
     if (existingUser) {
@@ -24,17 +21,19 @@ export async function POST(request: Request) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await User.create({
-      username,
-      email,
-      password: hashedPassword,
-      firstName,
-      lastName,
+    const user = await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: hashedPassword,
+        firstName,
+        lastName,
+      },
     });
 
     return created(
       {
-        id: user._id.toString(),
+        id: user.id,
         username: user.username,
         email: user.email,
       },

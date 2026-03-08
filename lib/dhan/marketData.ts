@@ -38,7 +38,7 @@ export interface HistoricalData {
 
 type Segment = 'NSE_EQ' | 'BSE_EQ';
 
-// ── Global rate limiter: max 1 Dhan quote call per 1.2s ──
+// -- Global rate limiter: max 1 Dhan quote call per 1.2s --
 async function rateLimitedCall<T>(fn: () => Promise<T>): Promise<T> {
   const state = getState();
   const now = Date.now();
@@ -100,18 +100,35 @@ export async function getQuotesForSegment(
 }
 
 /**
- * Fetch quotes for multiple segments. Reuses per-segment cache.
- * For "Both" mode — if NSE was already fetched 10s ago, only BSE gets fetched.
+ * Fetch quotes for multiple segments IN PARALLEL. Reuses per-segment cache.
+ * Much faster than sequential fetching for "Both" mode.
  */
 export async function getQuotesMultiSegment(
   requests: { segment: Segment; securityIds: number[] }[]
 ): Promise<Map<number, QuoteData>> {
   const combined = new Map<number, QuoteData>();
 
-  for (const { segment, securityIds } of requests) {
-    const quotes = await getQuotesForSegment(segment, securityIds);
-    for (const [id, q] of quotes.entries()) {
-      combined.set(id, q);
+  // Check which segments actually need fetching vs cached
+  const state = getState();
+  const needsFetch: typeof requests = [];
+  for (const req of requests) {
+    const cached = state.quoteCache[req.segment];
+    if (cached && Date.now() - cached.timestamp < QUOTE_CACHE_TTL) {
+      for (const [id, q] of cached.quotes.entries()) combined.set(id, q);
+    } else {
+      needsFetch.push(req);
+    }
+  }
+
+  // Fetch uncached segments in parallel
+  if (needsFetch.length > 0) {
+    const results = await Promise.all(
+      needsFetch.map(({ segment, securityIds }) =>
+        getQuotesForSegment(segment, securityIds)
+      )
+    );
+    for (const quotes of results) {
+      for (const [id, q] of quotes.entries()) combined.set(id, q);
     }
   }
 

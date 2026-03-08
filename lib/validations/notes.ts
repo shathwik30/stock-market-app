@@ -23,7 +23,7 @@ export const createNoteSchema = z.object({
 });
 
 export const updateNoteSchema = z.object({
-  _id: z.string().min(1, 'Note ID is required'),
+  id: z.string().min(1, 'Note ID is required'),
   title: z
     .string()
     .min(1, 'Title cannot be empty')
@@ -37,7 +37,7 @@ export const updateNoteSchema = z.object({
 });
 
 export const deleteNoteSchema = z.object({
-  _id: z.string().min(1, 'Note ID is required'),
+  id: z.string().min(1, 'Note ID is required'),
 });
 
 export type NoteColor = z.infer<typeof noteColorSchema>;

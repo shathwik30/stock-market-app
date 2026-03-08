@@ -1,22 +1,23 @@
 import { NextResponse } from 'next/server';
-import { topLosersData } from '@/lib/mockData';
 import { getUserIdFromToken } from '@/lib/auth';
 import { handleApiError } from '@/lib/api-response';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    // Verify authentication
     await getUserIdFromToken();
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: 'Top losers fetched successfully',
-        count: topLosersData.length,
-        data: topLosersData,
-      },
-      { status: 200 }
-    );
+    const baseUrl = new URL(request.url).origin;
+    const res = await fetch(`${baseUrl}/api/market/live?exchange=NSE`);
+    const data = await res.json();
+
+    const losers = data.losers || [];
+
+    return NextResponse.json({
+      success: true,
+      message: 'Top losers fetched successfully',
+      data: losers,
+      count: losers.length,
+    });
   } catch (error) {
     return handleApiError(error);
   }
