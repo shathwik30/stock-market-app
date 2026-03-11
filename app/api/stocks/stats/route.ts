@@ -1,36 +1,57 @@
+/**
+ * GET /api/stocks/stats
+ *
+ * Returns pre-computed market statistics from MarketStats table.
+ * Zero computation at request time — just a DB read.
+ */
+
 import { NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
 import { getUserIdFromToken } from '@/lib/auth';
 import { handleApiError } from '@/lib/api-response';
+import { ensureDataReady } from '@/lib/sync/engine';
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
     await getUserIdFromToken();
 
-    // Fetch live stats from our own market API (reuses its 25s cache)
-    const baseUrl = new URL(request.url).origin;
-    const res = await fetch(`${baseUrl}/api/market/live?exchange=NSE`, {
-      headers: { 'Cache-Control': 'no-cache' },
-    });
+    // Ensure sync has run at least once
+    await ensureDataReady('NSE');
 
-    if (!res.ok) {
-      return NextResponse.json(
-        { success: true, stats: { totalGainers: 0, totalLosers: 0, avgGain: 0, avgLoss: 0, topGainer: null, topLoser: null } },
-      );
-    }
+    const statsRow = await prisma.marketStats.findUnique({ where: { exchange: 'NSE' } });
 
-    const data = await res.json();
+    const stats = statsRow
+      ? {
+          totalGainers: statsRow.totalGainers,
+          totalLosers: statsRow.totalLosers,
+          totalUnchanged: statsRow.totalUnchanged,
+          avgGain: statsRow.avgGain,
+          avgLoss: statsRow.avgLoss,
+          topGainer: statsRow.topGainerName
+            ? {
+                company: statsRow.topGainerName,
+                symbol: statsRow.topGainerSymbol || '',
+                sector: statsRow.topGainerSector || '-',
+                ltp: statsRow.topGainerLtp || 0,
+                percentInChange: statsRow.topGainerPct || 0,
+              }
+            : null,
+          topLoser: statsRow.topLoserName
+            ? {
+                company: statsRow.topLoserName,
+                symbol: statsRow.topLoserSymbol || '',
+                sector: statsRow.topLoserSector || '-',
+                ltp: statsRow.topLoserLtp || 0,
+                percentInChange: statsRow.topLoserPct || 0,
+              }
+            : null,
+        }
+      : {
+          totalGainers: 0, totalLosers: 0, totalUnchanged: 0,
+          avgGain: 0, avgLoss: 0, topGainer: null, topLoser: null,
+        };
 
-    return NextResponse.json({
-      success: true,
-      stats: data.stats || {
-        totalGainers: 0,
-        totalLosers: 0,
-        avgGain: 0,
-        avgLoss: 0,
-        topGainer: null,
-        topLoser: null,
-      },
-    });
+    return NextResponse.json({ success: true, stats });
   } catch (error) {
     return handleApiError(error);
   }

@@ -1,195 +1,177 @@
+/**
+ * GET /api/market/live
+ *
+ * Serves pre-computed stock data from LiveQuote table with server-side pagination.
+ * The sync engine writes to LiveQuote in the background; this route just reads.
+ *
+ * Query params:
+ *   exchange  = NSE | BSE | Both (default: NSE)
+ *   filter    = all | gainers | losers | unchanged (default: all)
+ *   page      = 1-based page number (default: 1)
+ *   pageSize  = items per page (default: 150, max: 500)
+ *   sort      = column to sort by (default: pctChange)
+ *   order     = asc | desc (default: desc)
+ *   search    = search company name or symbol
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { handleApiError } from '@/lib/api-response';
+import { prisma } from '@/lib/prisma';
+import { ensureDataReady, getSyncStatus } from '@/lib/sync/engine';
+import type { Exchange, StockQuoteDTO, MarketStatsDTO } from '@/lib/sync/types';
 
-// Allow up to 60s on Vercel Pro (cold start can be slow: scrip master download + historical load)
 export const maxDuration = 60;
-import { getScripMaster, deduplicateByIsin, ScripInfo } from '@/lib/dhan/scripMaster';
-import { getQuotesMultiSegment, QuoteData } from '@/lib/dhan/marketData';
-import {
-  ensureHistoricalLoaded,
-  ensureSnapshotsLoaded,
-  startPopulation,
-  syncDailyFromQuotes,
-  calcChanges,
-  getPopulationStatus,
-  storeSnapshot,
-} from '@/lib/dhan/historicalService';
-import { classifyMarketCap, startEnrichment } from '@/lib/dhan/stockEnrichment';
 
-interface StockQuote {
-  id: string;
-  companyName: string;
-  tradingSymbol: string;
-  sector: string;
-  industry: string;
-  group: string;
-  faceValue: number;
-  priceBand: string;
-  marketCap: string;
-  preClose: number;
-  cmp: number;
-  netChange: number;
-  percentChange: number;
-  percentChanges: Record<string, number | null>;
-  week52High?: number;
-  week52Low?: number;
-  volume?: number;
-}
+// Map sort parameter to SQL ORDER BY clause
+const SORT_MAP: Record<string, string> = {
+  pctChange: '"pctChange"',
+  netChange: '"netChange"',
+  volume: 'volume',
+  name: '"displayName"',
+  lastPrice: '"lastPrice"',
+  prevClose: '"prevClose"',
+  marketCap: '"marketCapValue"',
+};
 
-// Response cache per exchange mode (NSE / BSE / Both) — 25s TTL
-const responseCache: Record<string, { json: unknown; timestamp: number }> = {};
-const RESP_CACHE_TTL = 25_000;
+// Map for % change column sorts (JSONB field)
+function getSortClause(sort: string, order: string): string {
+  const dir = order === 'asc' ? 'ASC' : 'DESC';
+  const nulls = order === 'asc' ? 'NULLS LAST' : 'NULLS LAST';
 
-function priceBand(upper: number, lower: number, prev: number): string {
-  if (!prev || !upper || !lower) return 'No Band';
-  const p = Math.round(((upper - prev) / prev) * 100);
-  return p <= 2 ? '2%' : p <= 5 ? '5%' : p <= 10 ? '10%' : p <= 20 ? '20%' : 'No Band';
-}
+  // Direct column sort
+  if (SORT_MAP[sort]) {
+    return `${SORT_MAP[sort]} ${dir} ${nulls}`;
+  }
 
-function build(s: ScripInfo, q: QuoteData): StockQuote {
-  const prev = q.ohlc.close;
-  const cmp = q.last_price;
-  const net = Math.round((cmp - prev) * 100) / 100;
-  const pctChg = prev > 0 ? Math.round(((cmp - prev) / prev) * 10000) / 100 : 0;
-
-  return {
-    id: '0',
-    companyName: s.displayName,
-    tradingSymbol: s.tradingSymbol,
-    sector: s.sector || '-',
-    industry: s.industry || '-',
-    group: s.series,
-    faceValue: s.faceValue,
-    priceBand: priceBand(q.upper_circuit_limit, q.lower_circuit_limit, prev),
-    marketCap: classifyMarketCap(s.marketCapValue || 0),
-    preClose: Math.round(prev * 100) / 100,
-    cmp: Math.round(cmp * 100) / 100,
-    netChange: net,
-    percentChange: pctChg,
-    percentChanges: calcChanges(s.securityId, s.exchangeSegment, cmp, prev),
-    week52High: q['52_week_high'],
-    week52Low: q['52_week_low'],
-    volume: q.volume,
-  };
+  // % change column sort (JSONB key)
+  // Accept keys like "% 1W Chag", "% 5Min Chag", etc.
+  const safeKey = sort.replace(/[^a-zA-Z0-9% ]/g, '');
+  return `COALESCE(("percentChanges"->>'${safeKey}')::float, ${order === 'asc' ? '999999' : '-999999'}) ${dir}`;
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const exchange = (request.nextUrl.searchParams.get('exchange') || 'NSE') as 'NSE' | 'BSE' | 'Both';
+    const sp = request.nextUrl.searchParams;
+    const exchange = (sp.get('exchange') || 'NSE') as Exchange;
+    const filter = (sp.get('filter') || 'all') as 'all' | 'gainers' | 'losers' | 'unchanged';
+    const page = Math.max(1, parseInt(sp.get('page') || '1'));
+    const pageSize = Math.min(500, Math.max(1, parseInt(sp.get('pageSize') || '150')));
+    const sort = sp.get('sort') || 'pctChange';
+    const order = (sp.get('order') || 'desc') as 'asc' | 'desc';
+    const search = sp.get('search')?.trim() || '';
 
-    // -- Fast path: serve from response cache --
-    const rc = responseCache[exchange];
-    if (rc && Date.now() - rc.timestamp < RESP_CACHE_TTL) {
-      return NextResponse.json(rc.json);
+    // Ensure data exists (blocking on first-ever load, background refresh if stale)
+    await ensureDataReady(exchange);
+
+    // Build WHERE clause
+    const conditions: string[] = [];
+    if (exchange !== 'Both') {
+      conditions.push(`exchange = '${exchange}'`);
+    }
+    if (filter === 'gainers') conditions.push(`"netChange" > 0`);
+    else if (filter === 'losers') conditions.push(`"netChange" < 0`);
+    else if (filter === 'unchanged') conditions.push(`"netChange" = 0`);
+
+    if (search) {
+      const safeSearch = search.replace(/'/g, "''").replace(/[%_]/g, '');
+      conditions.push(`("displayName" ILIKE '%${safeSearch}%' OR "tradingSymbol" ILIKE '%${safeSearch}%')`);
     }
 
-    // -- 1. Scrip master (from DB cache, <10ms) --
-    let stocks = await getScripMaster(exchange);
-    if (exchange === 'Both') stocks = deduplicateByIsin(stocks);
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const orderClause = getSortClause(sort, order);
+    const offset = (page - 1) * pageSize;
 
-    // -- 2. Group stocks by segment --
-    const bySegment: Record<string, number[]> = {};
-    for (const s of stocks) {
-      if (!bySegment[s.exchangeSegment]) bySegment[s.exchangeSegment] = [];
-      bySegment[s.exchangeSegment].push(s.securityId);
+    // Count total matching stocks
+    const countResult = await prisma.$queryRawUnsafe<[{ count: bigint }]>(
+      `SELECT COUNT(*)::bigint as count FROM "LiveQuote" ${whereClause}`
+    );
+    const totalStocks = Number(countResult[0]?.count || 0);
+    const totalPages = Math.ceil(totalStocks / pageSize);
+
+    // Fetch paginated stocks
+    const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      `SELECT * FROM "LiveQuote" ${whereClause} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
+    );
+
+    // Transform DB rows to frontend DTO
+    const stocks: StockQuoteDTO[] = rows.map((row, idx) => ({
+      id: String(offset + idx + 1),
+      companyName: row.displayName as string,
+      tradingSymbol: row.tradingSymbol as string,
+      sector: (row.sector as string) || '-',
+      industry: (row.industry as string) || '-',
+      group: (row.series as string) || '',
+      faceValue: Number(row.faceValue) || 1,
+      priceBand: (row.priceBand as string) || 'No Band',
+      marketCap: (row.marketCapLabel as string) || '-',
+      preClose: Math.round(Number(row.prevClose) * 100) / 100,
+      cmp: Math.round(Number(row.lastPrice) * 100) / 100,
+      netChange: Math.round(Number(row.netChange) * 100) / 100,
+      percentChange: Math.round(Number(row.pctChange) * 100) / 100,
+      percentChanges: (row.percentChanges as Record<string, number | null>) || {},
+      week52High: row.week52High != null ? Number(row.week52High) : undefined,
+      week52Low: row.week52Low != null ? Number(row.week52Low) : undefined,
+      volume: Number(row.volume) || 0,
+    }));
+
+    // Get pre-computed stats from MarketStats table
+    const statsExchange = exchange === 'Both' ? 'Both' : exchange;
+    const statsRow = await prisma.marketStats.findUnique({ where: { exchange: statsExchange } });
+
+    // Fallback: if no MarketStats for 'Both', compute from NSE + BSE
+    let stats: MarketStatsDTO;
+    if (statsRow) {
+      stats = {
+        totalGainers: statsRow.totalGainers,
+        totalLosers: statsRow.totalLosers,
+        totalUnchanged: statsRow.totalUnchanged,
+        avgGain: statsRow.avgGain,
+        avgLoss: statsRow.avgLoss,
+        topGainer: statsRow.topGainerName
+          ? {
+              company: statsRow.topGainerName,
+              symbol: statsRow.topGainerSymbol || '',
+              sector: statsRow.topGainerSector || '-',
+              ltp: statsRow.topGainerLtp || 0,
+              percentInChange: statsRow.topGainerPct || 0,
+            }
+          : null,
+        topLoser: statsRow.topLoserName
+          ? {
+              company: statsRow.topLoserName,
+              symbol: statsRow.topLoserSymbol || '',
+              sector: statsRow.topLoserSector || '-',
+              ltp: statsRow.topLoserLtp || 0,
+              percentInChange: statsRow.topLoserPct || 0,
+            }
+          : null,
+      };
+    } else {
+      // No stats yet — return zeros
+      stats = {
+        totalGainers: 0, totalLosers: 0, totalUnchanged: 0,
+        avgGain: 0, avgLoss: 0, topGainer: null, topLoser: null,
+      };
     }
-    const segments = Object.keys(bySegment);
 
-    // -- 3. Load historical + snapshots + quotes ALL IN PARALLEL --
-    const [, , allQuotes] = await Promise.all([
-      // Historical data from DB → memory (instant after first load)
-      Promise.all(segments.map((seg) => ensureHistoricalLoaded(seg))),
-      // Snapshot recovery from DB (cold start)
-      ensureSnapshotsLoaded(),
-      // Live quotes — parallel across segments
-      getQuotesMultiSegment(
-        segments.map((seg) => ({
-          segment: seg as 'NSE_EQ' | 'BSE_EQ',
-          securityIds: bySegment[seg],
-        }))
-      ),
-    ]);
+    const syncStatus = getSyncStatus();
 
-    // -- 4. Store price snapshot for intraday calculations --
-    storeSnapshot(allQuotes);
-
-    // -- 5. Daily sync (fire-and-forget, no blocking) --
-    for (const seg of segments) {
-      const segQuotes = new Map<number, QuoteData>();
-      for (const s of stocks.filter((st) => st.exchangeSegment === seg)) {
-        const q = allQuotes.get(s.securityId);
-        if (q) segQuotes.set(s.securityId, q);
-      }
-      syncDailyFromQuotes(segQuotes, seg).catch(() => {});
-    }
-
-    // -- 6. Trigger background population for missing historical data --
-    startPopulation(stocks.map((s) => ({ securityId: s.securityId, exchangeSegment: s.exchangeSegment })));
-
-    // -- 6b. Background enrich stocks with sector/industry/marketCap --
-    startEnrichment(50).catch(() => {});
-
-    // -- 7. Build response --
-    const scripMap = new Map<number, ScripInfo>();
-    stocks.forEach((s) => scripMap.set(s.securityId, s));
-
-    const all: StockQuote[] = [];
-    for (const [id, q] of allQuotes.entries()) {
-      const s = scripMap.get(id);
-      if (!s || !q.last_price || q.last_price <= 0) continue;
-      try { all.push(build(s, q)); } catch { /* skip */ }
-    }
-
-    const gainers = all.filter((s) => s.netChange > 0).sort((a, b) => b.percentChange - a.percentChange);
-    const losers = all.filter((s) => s.netChange < 0).sort((a, b) => a.percentChange - b.percentChange);
-    const unchanged = all.filter((s) => s.netChange === 0).sort((a, b) => a.companyName.localeCompare(b.companyName));
-
-    gainers.forEach((s, i) => (s.id = `${i + 1}`));
-    losers.forEach((s, i) => (s.id = `${i + 1}`));
-    unchanged.forEach((s, i) => (s.id = `${i + 1}`));
-
-    // -- 8. Compute stats for dashboard --
-    const avgGain = gainers.length > 0
-      ? Math.round(gainers.reduce((sum, s) => sum + s.percentChange, 0) / gainers.length * 100) / 100
-      : 0;
-    const avgLoss = losers.length > 0
-      ? Math.round(losers.reduce((sum, s) => sum + s.percentChange, 0) / losers.length * 100) / 100
-      : 0;
-
-    const json = {
-      gainers,
-      losers,
-      unchanged,
-      stats: {
-        totalGainers: gainers.length,
-        totalLosers: losers.length,
-        totalUnchanged: unchanged.length,
-        avgGain,
-        avgLoss,
-        topGainer: gainers[0] ? {
-          company: gainers[0].companyName,
-          symbol: gainers[0].tradingSymbol,
-          sector: gainers[0].sector,
-          ltp: gainers[0].cmp,
-          percentInChange: gainers[0].percentChange,
-        } : null,
-        topLoser: losers[0] ? {
-          company: losers[0].companyName,
-          symbol: losers[0].tradingSymbol,
-          sector: losers[0].sector,
-          ltp: losers[0].cmp,
-          percentInChange: losers[0].percentChange,
-        } : null,
+    return NextResponse.json({
+      stocks,
+      pagination: { page, pageSize, totalStocks, totalPages },
+      stats,
+      lastSyncAt: syncStatus.lastSyncAt,
+      syncStatus: {
+        isRunning: syncStatus.isRunning,
+        historicalPopulating: syncStatus.historicalPopulating,
+        historicalProgress: syncStatus.historicalProgress,
+        cachedCount: syncStatus.cachedCount,
       },
-      lastUpdated: new Date().toISOString(),
-      totalStocks: all.length,
-      historicalStatus: getPopulationStatus(),
-    };
-
-    responseCache[exchange] = { json, timestamp: Date.now() };
-    return NextResponse.json(json);
+    });
   } catch (error) {
-    console.error('Market API error:', error);
-    return handleApiError(error);
+    console.error('[API:market/live] Error:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

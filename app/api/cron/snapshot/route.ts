@@ -1,39 +1,28 @@
+/**
+ * GET /api/cron/snapshot
+ *
+ * Cron endpoint — runs the sync engine in a LOOP for maximum data freshness.
+ * During a 55-second window, it cycles through:
+ *   - NSE quotes → compute → write (every cycle)
+ *   - BSE quotes → compute → write (every 3rd cycle)
+ *
+ * Result: ~8-10 NSE refreshes per minute, ~3 BSE refreshes per minute.
+ * Each refresh writes to LiveQuote + MarketStats — API routes serve instantly.
+ *
+ * SETUP:
+ *   Vercel Cron (Pro): add to vercel.json, 1-minute interval
+ *   External: cron-job.org / UptimeRobot, ping every 1 minute
+ *   URL: https://your-app.vercel.app/api/cron/snapshot?secret=YOUR_SECRET
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { getQuotesForSegment, QuoteData } from '@/lib/dhan/marketData';
-import { getScripMaster } from '@/lib/dhan/scripMaster';
-import {
-  ensureHistoricalLoaded,
-  ensureSnapshotsLoaded,
-  storeSnapshot,
-  syncDailyFromQuotes,
-  startPopulation,
-} from '@/lib/dhan/historicalService';
-import { startEnrichment } from '@/lib/dhan/stockEnrichment';
+import { runSyncLoop } from '@/lib/sync/engine';
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
-// Vercel Pro: allow up to 60s for cold starts
+// Vercel Pro: allow up to 60s for the sync loop
 export const maxDuration = 60;
 
-/**
- * Lightweight cron endpoint — fetches NSE quotes, stores price snapshots,
- * syncs daily closes, and triggers background historical population.
- *
- * HOW INTRADAY % CHANGES WORK:
- * - Each call stores a price snapshot (timestamp + all stock prices)
- * - Snapshots accumulate in DB over the trading day
- * - When calcChanges() needs "5min ago" price, it finds the snapshot
- *   closest to 5 minutes ago and reads that stock's price
- * - So: more frequent calls = more accurate intraday % changes
- * - Ideal: 1 call/minute = snapshots every minute = accurate 5min/15min/30min/1hr/2hr changes
- *
- * SETUP OPTIONS:
- * 1. Vercel Cron (Pro plan): add to vercel.json, minimum 1-minute interval
- * 2. External service (free): cron-job.org, UptimeRobot — ping every 1 minute
- *    URL: https://your-app.vercel.app/api/cron/snapshot?secret=YOUR_SECRET
- *
- * NSE only for speed (~2-3s). BSE handled by /api/market/live when users request it.
- */
 export async function GET(request: NextRequest) {
   const t0 = Date.now();
 
@@ -47,7 +36,6 @@ export async function GET(request: NextRequest) {
   }
 
   // Check if within Indian market hours (9:14 AM - 3:35 PM IST, Mon-Fri)
-  // Start 1 min early to capture pre-open snapshot
   const now = new Date();
   const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
   const day = ist.getUTCDay();
@@ -58,39 +46,26 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // 1. Load scrip master (cached in-memory 1hr, DB 24hr)
-    const stocks = await getScripMaster('NSE');
-    const ids = stocks.map((s) => s.securityId);
+    // Run sync loop for up to 55 seconds (5s buffer before cron timeout)
+    const { cycles, results } = await runSyncLoop(55_000);
 
-    // 2. All 3 in parallel: historical load + snapshot recovery + quote fetch
-    const [, , quotes] = await Promise.all([
-      ensureHistoricalLoaded('NSE_EQ'),
-      ensureSnapshotsLoaded(),
-      getQuotesForSegment('NSE_EQ', ids),
-    ]);
-
-    // 3. Store snapshot (memory + DB, deduplicates if < 20s since last)
-    storeSnapshot(quotes);
-
-    // 4. Daily sync — append today's close (fire-and-forget)
-    syncDailyFromQuotes(quotes, 'NSE_EQ').catch(() => {});
-
-    // 5. Background populate missing historical data (fire-and-forget)
-    startPopulation(stocks.map((s) => ({ securityId: s.securityId, exchangeSegment: s.exchangeSegment })));
-
-    // 6. Background enrich stocks with sector/industry/marketCap from Yahoo Finance
-    startEnrichment(50).catch(() => {});
-
+    const totalQuotes = results.reduce((sum, r) => sum + r.quotesUpdated, 0);
     const elapsed = Date.now() - t0;
 
     return NextResponse.json({
       ok: true,
-      stocks: quotes.size,
+      cycles,
+      totalQuotesWritten: totalQuotes,
       elapsed: `${elapsed}ms`,
-      snapshot: now.toISOString(),
+      avgCycleMs: cycles > 0 ? Math.round(elapsed / cycles) : 0,
+      results: results.map((r) => ({
+        cycle: r.cycle,
+        quotes: r.quotesUpdated,
+        elapsed: `${r.elapsed}ms`,
+      })),
     });
   } catch (error) {
-    console.error('[Cron] Snapshot error:', error);
+    console.error('[Cron] Sync loop error:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status: 500 }

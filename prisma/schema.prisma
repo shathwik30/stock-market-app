@@ -177,3 +177,73 @@ model PriceSnapshot {
 
   @@index([timestamp])
 }
+
+// ── Pre-computed live data (written by sync engine, read by API routes) ──
+
+model LiveQuote {
+  id              String   @id @default(uuid())
+  securityId      Int
+  exchange        String
+  exchangeSegment String
+  tradingSymbol   String
+  displayName     String
+  sector          String   @default("-")
+  industry        String   @default("-")
+  series          String   @default("")
+  faceValue       Float    @default(1)
+  marketCapValue  Float    @default(0)
+  marketCapLabel  String   @default("-")
+  priceBand       String   @default("No Band")
+
+  lastPrice       Float    @default(0)
+  prevClose       Float    @default(0)
+  open            Float    @default(0)
+  high            Float    @default(0)
+  low             Float    @default(0)
+  netChange       Float    @default(0)
+  pctChange       Float    @default(0)
+  volume          Float    @default(0)
+
+  upperCircuit    Float    @default(0)
+  lowerCircuit    Float    @default(0)
+  week52High      Float?
+  week52Low       Float?
+
+  percentChanges  Json     @default("{}")
+
+  syncedAt        DateTime @default(now())
+
+  @@unique([securityId, exchange])
+  @@index([exchange, pctChange(sort: Desc)])
+  @@index([exchange, volume(sort: Desc)])
+  @@index([exchange, displayName])
+  @@index([exchange, netChange])
+}
+
+model MarketStats {
+  id             String   @id
+  exchange       String   @unique
+  totalStocks    Int      @default(0)
+  totalGainers   Int      @default(0)
+  totalLosers    Int      @default(0)
+  totalUnchanged Int      @default(0)
+  avgGain        Float    @default(0)
+  avgLoss        Float    @default(0)
+
+  topGainerName   String?
+  topGainerSymbol String?
+  topGainerSector String?
+  topGainerLtp    Float?
+  topGainerPct    Float?
+
+  topLoserName    String?
+  topLoserSymbol  String?
+  topLoserSector  String?
+  topLoserLtp     Float?
+  topLoserPct     Float?
+
+  lastSyncAt      DateTime @default(now())
+  syncCycles      Int      @default(0)
+
+  updatedAt       DateTime @updatedAt
+}

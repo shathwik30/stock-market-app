@@ -39,7 +39,7 @@ function toTableStock(s: MarketStock): TopGainerLoserStock {
     changePercent: s.percentChange,
     daysHigh: s.week52High ?? s.cmp,
     daysLow: s.week52Low ?? s.cmp,
-    open: s.preClose + s.netChange * 0.3, // approximate
+    open: s.preClose + s.netChange * 0.3,
     vwap: s.cmp,
     sparklineData: [],
     sector: s.sector,
@@ -62,7 +62,6 @@ function applyFilter(
 
   switch (filter) {
     case 'onlyBuyers':
-      // Stocks hitting upper circuit (price >= upper circuit limit approximation: band > 0 and at ceiling)
       return gainers.filter((s) => s.priceBand !== 'No Band' && s.percentChange >= parseFloat(s.priceBand));
     case 'onlySellers':
       return losers.filter((s) => s.priceBand !== 'No Band' && Math.abs(s.percentChange) >= parseFloat(s.priceBand));
@@ -71,7 +70,6 @@ function applyFilter(
     case '52wkLow':
       return losers.filter((s) => s.week52Low && s.cmp <= s.week52Low * 1.02);
     case 'allTimeHigh':
-      // ATH uses historical data — approximate with 52wk high + strong gains
       return gainers.filter((s) => s.week52High && s.cmp >= s.week52High);
     case 'allTimeLow':
       return losers.filter((s) => s.week52Low && s.cmp <= s.week52Low);
@@ -108,9 +106,14 @@ function ScreenerContent({ screenerType }: ScreenerPageProps) {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await apiClient.get(`/api/market/live?exchange=${exchange}`);
-      setGainers(res.data.gainers || []);
-      setLosers(res.data.losers || []);
+      // Fetch gainers and losers in parallel from the paginated API
+      // Use large pageSize to get all stocks for client-side filtering
+      const [gainersRes, losersRes] = await Promise.all([
+        apiClient.get(`/api/market/live?exchange=${exchange}&filter=gainers&pageSize=5000&sort=pctChange&order=desc`),
+        apiClient.get(`/api/market/live?exchange=${exchange}&filter=losers&pageSize=5000&sort=pctChange&order=asc`),
+      ]);
+      setGainers(gainersRes.data.stocks || []);
+      setLosers(losersRes.data.stocks || []);
     } catch {
       // Silently fail — table will show empty
     } finally {
@@ -121,7 +124,6 @@ function ScreenerContent({ screenerType }: ScreenerPageProps) {
   useEffect(() => {
     setLoading(true);
     fetchData();
-    // Auto-refresh every 30s
     const interval = setInterval(fetchData, 30_000);
     return () => clearInterval(interval);
   }, [fetchData]);
@@ -138,7 +140,6 @@ function ScreenerContent({ screenerType }: ScreenerPageProps) {
     } else {
       source = [...gainers, ...losers];
     }
-    // Re-index
     return source.map((s, i) => ({ ...s, id: `${i + 1}` }));
   }, [gainers, losers, config]);
 
