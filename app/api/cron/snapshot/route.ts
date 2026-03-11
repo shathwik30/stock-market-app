@@ -6,7 +6,7 @@
  *   - NSE quotes → compute → write (every cycle)
  *   - BSE quotes → compute → write (every 3rd cycle)
  *
- * Result: ~8-10 NSE refreshes per minute, ~3 BSE refreshes per minute.
+ * Result: ~8 NSE refreshes per minute, ~4 BSE refreshes per minute.
  * Each refresh writes to LiveQuote + MarketStats — API routes serve instantly.
  *
  * SETUP:

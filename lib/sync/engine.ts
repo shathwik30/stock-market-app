@@ -6,9 +6,9 @@
  * 2. Fetches ALL quotes, computes ALL % changes, writes to LiveQuote table
  * 3. API routes just read from DB — instant, zero-lag responses
  *
- * Rate limit strategy: ~1 Dhan call per second, 1000 IDs per call.
- * For ~2700 NSE stocks = 3 calls = ~3s per cycle.
- * In a 55s window = ~10 full refresh cycles per minute.
+ * Rate limit strategy: 1 Dhan call per second (hard cap), 1000 IDs per call.
+ * NSE (~2700 stocks) = 3 calls = ~3s. BSE (~5300) = 6 calls = ~6s.
+ * In a 55s window: ~8 NSE refreshes + ~4 BSE refreshes per minute.
  */
 
 import { getState } from './state';
@@ -129,8 +129,8 @@ export async function runSyncLoop(
       nseResult.cycle = ++cycle;
       results.push(nseResult);
 
-      // Sync BSE every 3rd cycle (saves rate limit budget for NSE freshness)
-      if (cycle % 3 === 0 && Date.now() < deadline - 6000) {
+      // Sync BSE every 2nd cycle (maximized — 1 req/sec is the hard cap)
+      if (cycle % 2 === 0 && Date.now() < deadline - 8000) {
         const bseResult = await runSingleSync('BSE');
         bseResult.cycle = cycle;
         results.push(bseResult);
