@@ -17,6 +17,7 @@ interface SyncState {
   // Sync coordination
   syncLock: boolean;
   lastSyncAt: number;
+  syncCycleCount: number;
 
   // Historical population tracking
   isPopulating: boolean;
@@ -37,6 +38,7 @@ export function getState(): SyncState {
       priceSnapshots: [],
       syncLock: false,
       lastSyncAt: 0,
+      syncCycleCount: 0,
       isPopulating: false,
       populationProgress: { completed: 0, total: 0 },
       lastApiCall: 0,

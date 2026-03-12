@@ -107,7 +107,7 @@ export async function runSingleSync(exchange: Exchange): Promise<SyncResult> {
  * NSE is synced every cycle. BSE every 3rd cycle (less critical).
  */
 export async function runSyncLoop(
-  maxDurationMs: number = 55_000
+  maxDurationMs: number = 8_000
 ): Promise<{ cycles: number; results: SyncResult[] }> {
   const state = getState();
 
@@ -118,28 +118,24 @@ export async function runSyncLoop(
   }
   state.syncLock = true;
 
-  const deadline = Date.now() + maxDurationMs;
+  // Track invocation count to alternate NSE/BSE across cron calls
+  state.syncCycleCount = (state.syncCycleCount || 0) + 1;
+  const cycleCount = state.syncCycleCount;
+
   const results: SyncResult[] = [];
   let cycle = 0;
 
   try {
-    while (Date.now() < deadline - 6000) { // 6s buffer for safety
-      // Always sync NSE (primary exchange)
+    // Single sync per invocation to fit Vercel free tier 10s timeout.
+    // NSE every call, BSE every 3rd call (saves bandwidth + time).
+    if (cycleCount % 3 === 0) {
+      const bseResult = await runSingleSync('BSE');
+      bseResult.cycle = ++cycle;
+      results.push(bseResult);
+    } else {
       const nseResult = await runSingleSync('NSE');
       nseResult.cycle = ++cycle;
       results.push(nseResult);
-
-      // Sync BSE every 2nd cycle (maximized — 1 req/sec is the hard cap)
-      if (cycle % 2 === 0 && Date.now() < deadline - 8000) {
-        const bseResult = await runSingleSync('BSE');
-        bseResult.cycle = cycle;
-        results.push(bseResult);
-      }
-
-      // Brief pause between cycles
-      if (Date.now() < deadline - 6000) {
-        await new Promise((r) => setTimeout(r, 300));
-      }
     }
   } catch (e) {
     console.error('[Sync:Engine] Loop error:', e instanceof Error ? e.message : e);
@@ -147,7 +143,7 @@ export async function runSyncLoop(
     state.syncLock = false;
   }
 
-  console.log(`[Sync:Engine] Loop finished: ${cycle} cycles in ${maxDurationMs}ms window`);
+  console.log(`[Sync:Engine] Cycle #${cycleCount} complete: synced ${results[0]?.quotesUpdated || 0} stocks`);
   return { cycles: cycle, results };
 }
 
@@ -178,11 +174,12 @@ export async function ensureDataReady(exchange: Exchange): Promise<void> {
     select: { syncedAt: true },
   });
 
-  if (latest && Date.now() - new Date(latest.syncedAt).getTime() > 60_000) {
-    // Stale data: trigger background sync (don't block the response)
+  if (latest && Date.now() - new Date(latest.syncedAt).getTime() > 300_000) {
+    // Stale data (>5 min): trigger background sync (don't block the response)
+    // Normal freshness is handled by the cron endpoint every minute
     const state = getState();
     if (!state.syncLock) {
-      console.log('[Sync:Engine] Data stale — triggering background sync');
+      console.log('[Sync:Engine] Data stale (>5min) — triggering background sync');
       runSingleSync(exchange).catch(() => {});
     }
   }

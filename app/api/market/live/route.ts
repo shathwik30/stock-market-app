@@ -19,7 +19,11 @@ import { prisma } from '@/lib/prisma';
 import { ensureDataReady, getSyncStatus } from '@/lib/sync/engine';
 import type { Exchange, StockQuoteDTO, MarketStatsDTO } from '@/lib/sync/types';
 
-export const maxDuration = 60;
+export const maxDuration = 10;
+
+// ── In-memory response cache (avoids repeated DB reads for identical requests) ──
+const responseCache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL_MS = 15_000; // 15 seconds — data is at most 15s old
 
 // Map sort parameter to SQL ORDER BY clause
 const SORT_MAP: Record<string, string> = {
@@ -59,6 +63,13 @@ export async function GET(request: NextRequest) {
     const order = (sp.get('order') || 'desc') as 'asc' | 'desc';
     const search = sp.get('search')?.trim() || '';
 
+    // ── Check in-memory cache first ──
+    const cacheKey = `${exchange}:${filter}:${page}:${pageSize}:${sort}:${order}:${search}`;
+    const cached = responseCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      return NextResponse.json(cached.data);
+    }
+
     // Ensure data exists (blocking on first-ever load, background refresh if stale)
     await ensureDataReady(exchange);
 
@@ -80,17 +91,22 @@ export async function GET(request: NextRequest) {
     const orderClause = getSortClause(sort, order);
     const offset = (page - 1) * pageSize;
 
-    // Count total matching stocks
-    const countResult = await prisma.$queryRawUnsafe<[{ count: bigint }]>(
-      `SELECT COUNT(*)::bigint as count FROM "LiveQuote" ${whereClause}`
-    );
+    // Count + fetch in parallel (fewer round trips to DB)
+    const [countResult, rows] = await Promise.all([
+      prisma.$queryRawUnsafe<[{ count: bigint }]>(
+        `SELECT COUNT(*)::bigint as count FROM "LiveQuote" ${whereClause}`
+      ),
+      // Select only columns the frontend needs (no id, securityId, exchangeSegment, open, high, low, circuits, syncedAt)
+      prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+        `SELECT "displayName", "tradingSymbol", sector, industry, series, "faceValue",
+                "priceBand", "marketCapLabel", "prevClose", "lastPrice", "netChange",
+                "pctChange", "percentChanges", "week52High", "week52Low", volume
+         FROM "LiveQuote" ${whereClause} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
+      ),
+    ]);
+
     const totalStocks = Number(countResult[0]?.count || 0);
     const totalPages = Math.ceil(totalStocks / pageSize);
-
-    // Fetch paginated stocks
-    const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      `SELECT * FROM "LiveQuote" ${whereClause} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
-    );
 
     // Transform DB rows to frontend DTO
     const stocks: StockQuoteDTO[] = rows.map((row, idx) => ({
@@ -155,7 +171,7 @@ export async function GET(request: NextRequest) {
 
     const syncStatus = getSyncStatus();
 
-    return NextResponse.json({
+    const responseData = {
       stocks,
       pagination: { page, pageSize, totalStocks, totalPages },
       stats,
@@ -166,7 +182,19 @@ export async function GET(request: NextRequest) {
         historicalProgress: syncStatus.historicalProgress,
         cachedCount: syncStatus.cachedCount,
       },
-    });
+    };
+
+    // ── Store in cache ──
+    responseCache.set(cacheKey, { data: responseData, ts: Date.now() });
+    // Evict old entries to prevent memory bloat
+    if (responseCache.size > 100) {
+      const now = Date.now();
+      for (const [key, val] of responseCache) {
+        if (now - val.ts > CACHE_TTL_MS) responseCache.delete(key);
+      }
+    }
+
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error('[API:market/live] Error:', error);
     return NextResponse.json(

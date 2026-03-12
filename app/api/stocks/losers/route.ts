@@ -34,6 +34,12 @@ export async function GET(request: NextRequest) {
         orderBy: { pctChange: 'asc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
+        select: {
+          displayName: true, tradingSymbol: true, sector: true, industry: true,
+          series: true, faceValue: true, priceBand: true, marketCapLabel: true,
+          prevClose: true, lastPrice: true, netChange: true, pctChange: true,
+          percentChanges: true, week52High: true, week52Low: true, volume: true,
+        },
       }),
     ]);
 

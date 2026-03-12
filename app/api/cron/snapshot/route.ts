@@ -20,8 +20,8 @@ import { runSyncLoop } from '@/lib/sync/engine';
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
-// Vercel Pro: allow up to 60s for the sync loop
-export const maxDuration = 60;
+// Vercel free tier: 10s max
+export const maxDuration = 10;
 
 export async function GET(request: NextRequest) {
   const t0 = Date.now();
@@ -46,8 +46,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Run sync loop for up to 55 seconds (5s buffer before cron timeout)
-    const { cycles, results } = await runSyncLoop(55_000);
+    // Run single sync cycle (fits within Vercel free tier 10s limit)
+    const { cycles, results } = await runSyncLoop(8_000);
 
     const totalQuotes = results.reduce((sum, r) => sum + r.quotesUpdated, 0);
     const elapsed = Date.now() - t0;
