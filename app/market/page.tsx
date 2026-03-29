@@ -390,11 +390,11 @@ function MarketPageContent() {
     fetchMarketData(1);
   }, [fetchMarketData]);
 
-  // Auto-refresh every 60 seconds (balanced: fresh data + low bandwidth)
+  // Auto-refresh every 30 seconds for near-real-time data
   useEffect(() => {
     const interval = setInterval(() => {
       fetchMarketData(currentPage, true);
-    }, 60000);
+    }, 30000);
     return () => clearInterval(interval);
   }, [fetchMarketData, currentPage]);
 

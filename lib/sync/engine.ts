@@ -110,9 +110,7 @@ export async function runSingleSync(exchange: Exchange): Promise<SyncResult> {
  * Alternates NSE/BSE based on IST minute (deterministic, survives cold starts).
  * BSE on even minutes, NSE on odd → each exchange synced every 2 minutes.
  */
-export async function runSyncLoop(
-  maxDurationMs: number = 8_000
-): Promise<{ cycles: number; results: SyncResult[] }> {
+export async function runSyncLoop(): Promise<{ cycles: number; results: SyncResult[] }> {
   const state = getState();
 
   // Prevent concurrent sync loops
@@ -172,13 +170,15 @@ export async function ensureDataReady(exchange: Exchange): Promise<void> {
     select: { syncedAt: true },
   });
 
-  if (latest && Date.now() - new Date(latest.syncedAt).getTime() > 300_000) {
-    // Stale data (>5 min): trigger background sync (don't block the response)
+  if (latest && Date.now() - new Date(latest.syncedAt).getTime() > 120_000) {
+    // Stale data (>2 min): trigger background sync (don't block the response)
     // Normal freshness is handled by the cron endpoint every minute
     const state = getState();
     if (!state.syncLock) {
-      console.log('[Sync:Engine] Data stale (>5min) — triggering background sync');
-      runSingleSync(exchange).catch(() => {});
+      console.log('[Sync:Engine] Data stale (>2min) — triggering background sync');
+      runSingleSync(exchange).catch((e) => {
+        console.error('[Sync:Engine] Background sync failed:', e instanceof Error ? e.message : e);
+      });
     }
   }
 }

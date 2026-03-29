@@ -5,20 +5,24 @@
  * Zero computation at request time — just a DB read.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getUserIdFromToken } from '@/lib/auth';
 import { handleApiError } from '@/lib/api-response';
 import { ensureDataReady } from '@/lib/sync/engine';
+import type { Exchange } from '@/lib/sync/types';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     await getUserIdFromToken();
 
-    // Ensure sync has run at least once
-    await ensureDataReady('NSE');
+    const exchange = (request.nextUrl.searchParams.get('exchange') || 'NSE') as Exchange;
+    const statsExchange = exchange === 'Both' ? 'Both' : exchange;
 
-    const statsRow = await prisma.marketStats.findUnique({ where: { exchange: 'NSE' } });
+    // Ensure sync has run at least once
+    await ensureDataReady(exchange);
+
+    const statsRow = await prisma.marketStats.findUnique({ where: { exchange: statsExchange } });
 
     const stats = statsRow
       ? {

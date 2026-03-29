@@ -24,7 +24,7 @@ export const maxDuration = 10;
 
 // ── In-memory response cache (avoids repeated DB reads for identical requests) ──
 const responseCache = new Map<string, { data: unknown; ts: number }>();
-const CACHE_TTL_MS = 15_000; // 15 seconds — data is at most 15s old
+const CACHE_TTL_MS = 10_000; // 10 seconds — data is at most 10s old
 
 // Map sort parameter to SQL ORDER BY clause
 const SORT_MAP: Record<string, string> = {
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
     else if (filter === 'unchanged') conditions.push(`"netChange" = 0`);
 
     if (search) {
-      const safeSearch = search.replace(/'/g, "''").replace(/[%_]/g, '');
+      const safeSearch = search.replace(/\\/g, '\\\\').replace(/'/g, "''").replace(/[%_]/g, '');
       conditions.push(`("displayName" ILIKE '%${safeSearch}%' OR "tradingSymbol" ILIKE '%${safeSearch}%')`);
     }
 

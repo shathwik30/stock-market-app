@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 
   try {
     // Run single sync cycle (fits within Vercel free tier 10s limit)
-    const { cycles, results } = await runSyncLoop(8_000);
+    const { cycles, results } = await runSyncLoop();
 
     const totalQuotes = results.reduce((sum, r) => sum + r.quotesUpdated, 0);
     const elapsed = Date.now() - t0;

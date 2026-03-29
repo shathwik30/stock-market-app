@@ -108,6 +108,8 @@ export async function writeLiveQuotes(
           "displayName" = EXCLUDED."displayName",
           sector = EXCLUDED.sector,
           industry = EXCLUDED.industry,
+          series = EXCLUDED.series,
+          "faceValue" = EXCLUDED."faceValue",
           "marketCapValue" = EXCLUDED."marketCapValue",
           "marketCapLabel" = EXCLUDED."marketCapLabel",
           "priceBand" = EXCLUDED."priceBand",

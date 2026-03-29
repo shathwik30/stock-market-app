@@ -9,7 +9,7 @@ import { getState } from './state';
 import type { DhanQuote } from './types';
 
 const WINDOW_MS = 150 * 60 * 1000; // 2.5 hours
-const DEDUP_MS = 20_000;            // Skip if snapshot stored < 20s ago
+const DEDUP_MS = 15_000;            // Skip if snapshot stored < 15s ago
 const CLEANUP_MS = 3 * 60 * 60 * 1000; // Clean DB snapshots older than 3hr
 
 /**
