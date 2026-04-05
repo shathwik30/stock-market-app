@@ -35,6 +35,20 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Force reload of historical cache (call after backfill is complete)
+  const forceReload = request.nextUrl.searchParams.get('forceReload') === 'true';
+  if (forceReload) {
+    const { getState } = await import('@/lib/sync/state');
+    const state = getState();
+    state.historicalLoaded = {};
+    state.historicalLoadPromise = {};
+    console.log('[Cron] Historical cache cleared — will reload from DB on next sync');
+    return NextResponse.json({
+      ok: true,
+      action: 'Historical cache cleared. Next sync cycle will reload from DB.',
+    });
+  }
+
   // Check if within Indian market hours (9:14 AM - 3:35 PM IST, Mon-Fri)
   const now = new Date();
   const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);

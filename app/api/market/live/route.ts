@@ -64,7 +64,8 @@ function getSortClause(sort: string, order: string): string {
 export async function GET(request: NextRequest) {
   try {
     const sp = request.nextUrl.searchParams;
-    const exchange = (sp.get('exchange') || 'NSE') as Exchange;
+    // Normalize "Only NSE" → "NSE", "Only BSE" → "BSE" for all DB operations
+    const exchange = (sp.get('exchange') || 'NSE').replace('Only ', '') as Exchange;
     const filter = (sp.get('filter') || 'all') as 'all' | 'gainers' | 'losers' | 'unchanged';
     const page = Math.max(1, parseInt(sp.get('page') || '1'));
     const pageSize = Math.min(500, Math.max(1, parseInt(sp.get('pageSize') || '200')));
@@ -95,7 +96,8 @@ export async function GET(request: NextRequest) {
       sp.get('changeMin') || '', sp.get('changeMax') || '',
       sp.get('volumeMin') || '',
     ].join('|');
-    const cacheKey = `${exchange}:${filter}:${page}:${pageSize}:${sort}:${order}:${search}:${filterKey}`;
+    const customDate = sp.get('customDate')?.trim() || '';
+    const cacheKey = `${exchange}:${filter}:${page}:${pageSize}:${sort}:${order}:${search}:${filterKey}:${customDate}`;
     const cached = responseCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
       return NextResponse.json(cached.data);
@@ -108,10 +110,9 @@ export async function GET(request: NextRequest) {
     const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "''");
     const baseConditions: string[] = [];
 
-    // Exchange filter
+    // Exchange filter (already normalized above: "Only NSE" → "NSE")
     if (exchange !== 'Both') {
-      const dbExchange = exchange.replace('Only ', '');
-      baseConditions.push(`exchange = '${esc(dbExchange)}'`);
+      baseConditions.push(`exchange = '${esc(exchange)}'`);
     }
 
     // Search
@@ -160,7 +161,8 @@ export async function GET(request: NextRequest) {
          FROM "LiveQuote" ${baseWhere}`
       ),
       prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-        `SELECT "displayName", "tradingSymbol", sector, industry, series, "faceValue",
+        `SELECT "securityId", "exchangeSegment",
+                "displayName", "tradingSymbol", sector, industry, series, "faceValue",
                 "priceBand", "marketCapValue", "prevClose", "lastPrice", "netChange",
                 "pctChange", "percentChanges", "week52High", "week52Low", volume
          FROM "LiveQuote" ${fullWhere} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
@@ -197,6 +199,53 @@ export async function GET(request: NextRequest) {
       week52Low: row.week52Low != null ? Number(row.week52Low) : undefined,
       volume: Number(row.volume) || 0,
     }));
+
+    // ── Custom date % change (override % Cust Date Chag for the current page) ──
+    if (customDate && stocks.length > 0) {
+      const targetTs = Math.floor(new Date(customDate + 'T00:00:00Z').getTime() / 1000);
+      if (isFinite(targetTs) && targetTs > 0) {
+        const secIds = rows.map(r => parseInt(String(r.securityId))).filter(n => isFinite(n) && n > 0);
+        if (secIds.length > 0) {
+          try {
+            const histRows = await prisma.$queryRawUnsafe<Array<{
+              securityId: number;
+              exchangeSegment: string;
+              customClose: number | null;
+            }>>(`
+              SELECT hp."securityId", hp."exchangeSegment",
+                (SELECT hp.closes[i]
+                 FROM generate_subscripts(hp.timestamps, 1) i
+                 WHERE hp.timestamps[i] <= ${targetTs}
+                 ORDER BY i DESC
+                 LIMIT 1
+                ) as "customClose"
+              FROM "HistoricalPrice" hp
+              WHERE hp."securityId" IN (${secIds.join(',')})
+            `);
+
+            const closeMap = new Map<string, number>();
+            for (const h of histRows) {
+              if (h.customClose != null && h.customClose > 0) {
+                closeMap.set(`${h.securityId}:${h.exchangeSegment}`, h.customClose);
+              }
+            }
+
+            for (let i = 0; i < stocks.length; i++) {
+              const key = `${rows[i].securityId}:${rows[i].exchangeSegment}`;
+              const customClose = closeMap.get(key);
+              if (customClose && customClose > 0 && stocks[i].cmp > 0) {
+                stocks[i].percentChanges['% Cust Date Chag'] =
+                  Math.round(((stocks[i].cmp - customClose) / customClose) * 10000) / 100;
+              } else {
+                stocks[i].percentChanges['% Cust Date Chag'] = null;
+              }
+            }
+          } catch (e) {
+            console.error('[API:market/live] Custom date query error:', e instanceof Error ? e.message : e);
+          }
+        }
+      }
+    }
 
     // Get pre-computed stats from MarketStats table
     const statsExchange = exchange === 'Both' ? 'Both' : exchange;
