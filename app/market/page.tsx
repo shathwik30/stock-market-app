@@ -379,20 +379,20 @@ function MarketPageContent() {
 
   const exchanges: string[] = ['NSE', 'BSE', 'Both', 'Only NSE', 'Only BSE'];
 
-  // MM/DD/YYYY ↔ YYYY-MM-DD helpers (used by the Customize Date picker)
+  // DD/MM/YYYY ↔ YYYY-MM-DD helpers (used by the Customize Date picker)
   const isoToDisplay = (iso: string): string => {
     if (!iso) return '';
     const [y, m, d] = iso.split('-');
     if (!y || !m || !d) return '';
-    return `${m}/${d}/${y}`;
+    return `${d}/${m}/${y}`;
   };
   const parseDisplayDate = (input: string): { iso: string; valid: boolean } => {
     const trimmed = input.trim();
     if (!trimmed) return { iso: '', valid: true };
     const m = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (!m) return { iso: '', valid: false };
-    const mm = m[1].padStart(2, '0');
-    const dd = m[2].padStart(2, '0');
+    const dd = m[1].padStart(2, '0');
+    const mm = m[2].padStart(2, '0');
     const yyyy = m[3];
     const d = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
     if (isNaN(d.getTime()) || d.getFullYear() !== Number(yyyy) || d.getMonth() + 1 !== Number(mm) || d.getDate() !== Number(dd)) {
@@ -843,7 +843,7 @@ function MarketPageContent() {
                       type="text"
                       value={startDateInput}
                       onChange={(e) => { setStartDateInput(e.target.value); setDateError(''); }}
-                      placeholder="MM/DD/YYYY"
+                      placeholder="DD/MM/YYYY"
                       className="border border-gray-300 rounded px-3 py-2 bg-white text-sm text-black placeholder-gray-400 focus:outline-none focus:border-[#1256A0] focus:ring-1 focus:ring-[#1256A0] w-36"
                     />
                   </div>
@@ -853,7 +853,7 @@ function MarketPageContent() {
                       type="text"
                       value={endDateInput}
                       onChange={(e) => { setEndDateInput(e.target.value); setDateError(''); }}
-                      placeholder="MM/DD/YYYY"
+                      placeholder="DD/MM/YYYY"
                       className="border border-gray-300 rounded px-3 py-2 bg-white text-sm text-black placeholder-gray-400 focus:outline-none focus:border-[#1256A0] focus:ring-1 focus:ring-[#1256A0] w-36"
                     />
                   </div>
@@ -862,8 +862,8 @@ function MarketPageContent() {
                     onClick={() => {
                       const start = parseDisplayDate(startDateInput);
                       const end = parseDisplayDate(endDateInput);
-                      if (!start.valid) { setDateError('Invalid Start Date. Use MM/DD/YYYY.'); return; }
-                      if (!end.valid) { setDateError('Invalid End Date. Use MM/DD/YYYY.'); return; }
+                      if (!start.valid) { setDateError('Invalid Start Date. Use DD/MM/YYYY.'); return; }
+                      if (!end.valid) { setDateError('Invalid End Date. Use DD/MM/YYYY.'); return; }
                       if (!start.iso && !end.iso) { setDateError('Enter at least a Start Date.'); return; }
                       if (!start.iso) { setDateError('Start Date is required.'); return; }
                       if (end.iso && start.iso > end.iso) { setDateError('Start Date must be before End Date.'); return; }
