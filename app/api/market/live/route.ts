@@ -28,7 +28,7 @@ import { ensureDataReady, getSyncStatus } from '@/lib/sync/engine';
 import type { Exchange, StockQuoteDTO, MarketStatsDTO } from '@/lib/sync/types';
 import { formatMarketCap } from '@/lib/format';
 
-export const maxDuration = 10;
+export const maxDuration = 60;
 
 // ── In-memory response cache (avoids repeated DB reads for identical requests) ──
 const responseCache = new Map<string, { data: unknown; ts: number }>();
