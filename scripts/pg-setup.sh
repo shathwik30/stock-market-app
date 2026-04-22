@@ -9,7 +9,7 @@ set -euo pipefail
 
 DB_NAME="${DB_NAME:-stockmarket}"
 DB_USER="${DB_USER:-stockapp}"
-DB_PASS="${DB_PASS:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)}"
+DB_PASS="${DB_PASS:-$(openssl rand -hex 16)}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
