@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # VM deployment script. Run from the project root on the target VM.
 #
-# Assumptions:
-#   - Node 22.x (nvm use, or system package) is installed
-#   - PostgreSQL is reachable via DATABASE_URL in .env.local
-#   - .env.local exists at project root with all required secrets
+# Env is loaded from the first of:
+#   1. .env.local in project root
+#   2. .env in project root
+#   3. /etc/stock-market-app.env  (canonical VM location)
 #
 # Usage:
 #   ./scripts/deploy.sh          # install + migrate + build
@@ -14,16 +14,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [[ ! -f .env.local && ! -f .env ]]; then
-  echo "ERROR: no .env.local or .env file found in $(pwd)" >&2
+ENV_FILE=""
+for f in .env.local .env /etc/stock-market-app.env; do
+  if [[ -f "$f" ]]; then
+    ENV_FILE="$f"
+    break
+  fi
+done
+if [[ -z "$ENV_FILE" ]]; then
+  echo "ERROR: no env file found (.env.local / .env / /etc/stock-market-app.env)" >&2
   exit 1
 fi
+echo "==> Loading env from $ENV_FILE"
 
-# Load env so prisma sees DATABASE_URL
 set -a
-# shellcheck disable=SC1091
-[[ -f .env.local ]] && source .env.local
-[[ -f .env && ! -f .env.local ]] && source .env
+# shellcheck disable=SC1090
+source "$ENV_FILE"
 set +a
 
 : "${DATABASE_URL:?DATABASE_URL must be set}"
