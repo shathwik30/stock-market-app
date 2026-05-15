@@ -252,12 +252,15 @@ export async function GET(request: NextRequest) {
                 // When end date provided, compare start → end close. Otherwise compare start → CMP.
                 const compareTo = endTs !== null ? entry.end : stocks[i].cmp;
                 if (compareTo && compareTo > 0) {
+                  stocks[i].customNetChange = Math.round((compareTo - entry.start) * 100) / 100;
                   stocks[i].percentChanges['% Cust Date Chag'] =
                     Math.round(((compareTo - entry.start) / entry.start) * 10000) / 100;
                 } else {
+                  stocks[i].customNetChange = null;
                   stocks[i].percentChanges['% Cust Date Chag'] = null;
                 }
               } else {
+                stocks[i].customNetChange = null;
                 stocks[i].percentChanges['% Cust Date Chag'] = null;
               }
             }

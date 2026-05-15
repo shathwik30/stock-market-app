@@ -72,6 +72,7 @@ export interface StockQuoteDTO {
   preClose: number;
   cmp: number;
   netChange: number;
+  customNetChange?: number | null;
   percentChange: number;
   percentChanges: Record<string, number | null>;
   week52High?: number;

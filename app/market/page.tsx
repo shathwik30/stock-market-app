@@ -21,7 +21,7 @@ const columnsByPeriod: Record<TimePeriod | SubTab, string[]> = {
   months: ['% 1M Chag', '% 2M Chag', '% 3M Chag', '% 4M Chag', '% 5M Chag', '% 6M Chag', '% 7M Chag', '% 8M Chag', '% 9M Chag', '% 10M Chag', '% 11M Chag', '% 1Y Chag'],
   years: ['% 1Y Chag', '% 2Y Chag', '% 3Y Chag', '% 4Y Chag', '% 5Y Chag', '% 10Y Chag', '% Max Chag'],
   customize: [],
-  custom: ['% Chag', '% Cust Date Chag'],
+  custom: ['% Cust Date Chag', '% Chag'],
   seasonality: ['% Chag', '% Cust Date Chag'],
   ytd: ['% YTD Chag', '% 2YTD Chag', '% 3YTD Chag', '% 4YTD Chag', '% 5YTD Chag', '% 10 YTD Chag', '% Cust Date Chag'],
   '52weeks': ['% 52W Chag', '% Cust Date Chag'],
@@ -78,6 +78,7 @@ interface StockData {
   preClose: number;
   cmp: number;
   netChange: number;
+  customNetChange?: number | null;
   percentChange?: number;
   percentChanges: Record<string, number | null>;
   volume?: number;
@@ -216,7 +217,7 @@ const SORT_ICON_MAP: Record<string, string> = {
   'Company Name': 'name', 'CMP': 'lastPrice', 'Net Chag': 'netChange', 'M Cap': 'marketCap',
 };
 
-function renderBaseCell(col: string, stock: StockData, colorClass: string) {
+function renderBaseCell(col: string, stock: StockData, colorClass: string, displayedNetChange: number) {
   const cls = 'border border-gray-300 px-2 py-1';
   switch (col) {
     case 'S No': return <td key={col} className={`${cls} text-center text-black`}>{stock.id}</td>;
@@ -229,7 +230,7 @@ function renderBaseCell(col: string, stock: StockData, colorClass: string) {
     case 'M Cap': return <td key={col} className={`${cls} text-right text-black whitespace-nowrap`}>{stock.marketCap}</td>;
     case 'Pre Close': return <td key={col} className={`${cls} text-right text-black`}>{stock.preClose.toFixed(2)}</td>;
     case 'CMP': return <td key={col} className={`${cls} text-right text-black font-medium`}>{stock.cmp.toFixed(2)}</td>;
-    case 'Net Chag': return <td key={col} className={`${cls} text-right font-medium ${colorClass}`}>{stock.netChange > 0 ? '+' : ''}{stock.netChange.toFixed(2)}</td>;
+    case 'Net Chag': return <td key={col} className={`${cls} text-right font-medium ${colorClass}`}>{displayedNetChange > 0 ? '+' : ''}{displayedNetChange.toFixed(2)}</td>;
     default: return null;
   }
 }
@@ -250,6 +251,7 @@ const StockTable = ({
   customEndDate?: string;
 }) => {
   const visibleBase = baseColumns.filter(c => !hiddenColumns.has(c));
+  const visibleColumns = columns.filter(c => !hiddenColumns.has(c));
 
   const SortIcon = ({ col }: { col: string }) => {
     if (sortCol !== col) return null;
@@ -275,7 +277,7 @@ const StockTable = ({
                   {SORT_ICON_MAP[col] && <SortIcon col={SORT_ICON_MAP[col]} />}
                 </th>
               ))}
-              {columns.map((col) => {
+              {visibleColumns.map((col) => {
                 let label = col;
                 if (col === '% Cust Date Chag' && customDate) {
                   const fmt = (iso: string) =>
@@ -298,17 +300,20 @@ const StockTable = ({
           <tbody>
             {data.length === 0 ? (
               <tr>
-                <td colSpan={visibleBase.length + columns.length} className="border border-gray-300 px-4 py-8 text-center text-gray-500">
+                <td colSpan={visibleBase.length + visibleColumns.length} className="border border-gray-300 px-4 py-8 text-center text-gray-500">
                   No data available
                 </td>
               </tr>
             ) : (
               data.map((stock) => {
-                const colorClass = stock.netChange > 0 ? 'text-green-600' : stock.netChange < 0 ? 'text-red-600' : 'text-gray-600';
+                const displayedNetChange = customDate && stock.customNetChange !== null && stock.customNetChange !== undefined
+                  ? stock.customNetChange
+                  : stock.netChange;
+                const colorClass = displayedNetChange > 0 ? 'text-green-600' : displayedNetChange < 0 ? 'text-red-600' : 'text-gray-600';
                 return (
                   <tr key={`${stock.id}-${stock.companyName}`} className="hover:bg-gray-50">
-                    {visibleBase.map(col => renderBaseCell(col, stock, colorClass))}
-                    {columns.map((col) => {
+                    {visibleBase.map(col => renderBaseCell(col, stock, colorClass, displayedNetChange))}
+                    {visibleColumns.map((col) => {
                       const value = stock.percentChanges[col];
                       const isNull = value === null || value === undefined;
                       return (
@@ -343,7 +348,7 @@ function MarketPageContent() {
   const viewParam = searchParams.get('view') as ViewType | null;
   const currentView: ViewType = viewParam === 'gainers' || viewParam === 'losers' || viewParam === 'unchanged' ? viewParam : 'all';
 
-  const [selectedExchange, setSelectedExchange] = useState<Exchange>('NSE');
+  const [selectedExchange, setSelectedExchange] = useState<Exchange>('Both');
   const [stockData, setStockData] = useState<StockData[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: PAGE_SIZE, totalStocks: 0, totalPages: 0 });
   const [stats, setStats] = useState<Stats>({ totalGainers: 0, totalLosers: 0, totalUnchanged: 0, avgGain: 0, avgLoss: 0 });
@@ -353,7 +358,7 @@ function MarketPageContent() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<string>('intraday');
+  const [activeTab, setActiveTab] = useState<string>('days');
   const [sortCol, setSortCol] = useState('pctChange');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -442,6 +447,7 @@ function MarketPageContent() {
   }, [selectedExchange]);
 
   const currentColumns = columnsByPeriod[activeTab as TimePeriod | SubTab] || [];
+  const toggleableColumnsForTab = [...TOGGLEABLE_COLUMNS, ...currentColumns];
   const periodLabel = allTabs.find(t => t.id === activeTab)?.label;
 
   // Fetch data from the paginated API
@@ -603,7 +609,8 @@ function MarketPageContent() {
   // CSV Download (respects column visibility)
   const downloadCSV = () => {
     const visibleBase = baseColumns.filter(c => !hiddenColumns.has(c));
-    const allColumns = [...visibleBase, ...currentColumns];
+    const visiblePeriodColumns = currentColumns.filter(c => !hiddenColumns.has(c));
+    const allColumns = [...visibleBase, ...visiblePeriodColumns];
     const headers = allColumns.join(',');
 
     const csvLines: string[] = [];
@@ -625,14 +632,19 @@ function MarketPageContent() {
         case 'M Cap': return `"${stock.marketCap}"`;
         case 'Pre Close': return stock.preClose.toFixed(2);
         case 'CMP': return stock.cmp.toFixed(2);
-        case 'Net Chag': return stock.netChange.toFixed(2);
+        case 'Net Chag': {
+          const displayedNetChange = customDate && stock.customNetChange !== null && stock.customNetChange !== undefined
+            ? stock.customNetChange
+            : stock.netChange;
+          return displayedNetChange.toFixed(2);
+        }
         default: return '';
       }
     };
 
     stockData.forEach((stock) => {
       const base = visibleBase.map(col => getCsvValue(col, stock));
-      const pctData = currentColumns.map(col => {
+      const pctData = visiblePeriodColumns.map(col => {
         const value = stock.percentChanges[col];
         return value === null || value === undefined ? '-' : value.toFixed(2);
       });
@@ -1006,7 +1018,7 @@ function MarketPageContent() {
           onReset={() => { setFilters(emptyFilters); setDebouncedFilters(emptyFilters); setCurrentPage(1); }}
           hiddenColumns={hiddenColumns}
           onHiddenColumnsChange={setHiddenColumns}
-          toggleableColumns={TOGGLEABLE_COLUMNS}
+          toggleableColumns={toggleableColumnsForTab}
         />
 
         {/* Loading State */}
