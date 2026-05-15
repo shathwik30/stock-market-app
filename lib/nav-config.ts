@@ -39,6 +39,9 @@ export const notesLink: NavLinkItem = { href: '/notes', label: 'Notes', icon: St
 
 export const screenersLinks = {
   technical: {
+    screeningTable: [
+      { href: '/screeners/screening-table', label: 'Screening Table' },
+    ],
     candlestickPatterns: [
       { href: '#', label: '1. Single Candlestick Patterns' },
       { href: '#', label: '2. Dual Candlestick Patterns' },

@@ -1,6 +1,13 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { Plus } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // ── Types ──
 
@@ -164,11 +171,14 @@ interface Props {
   hiddenColumns: Set<string>;
   onHiddenColumnsChange: (cols: Set<string>) => void;
   toggleableColumns: string[];
+  addColumnOptions?: string[];
+  onAddColumn?: (column: string) => void;
 }
 
 export default function FilterPanel({
   filters, options, onChange, onReset,
   hiddenColumns, onHiddenColumnsChange, toggleableColumns,
+  addColumnOptions = [], onAddColumn,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const activeCount = countActive(filters);
@@ -223,6 +233,31 @@ export default function FilterPanel({
             </span>
           )}
         </button>
+        {onAddColumn && addColumnOptions.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center border border-black bg-white text-black hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-black"
+                aria-label="Add column"
+                title="Add column"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 border-gray-300 bg-white text-black">
+              {addColumnOptions.map((option) => (
+                <DropdownMenuItem
+                  key={option}
+                  className="cursor-pointer text-sm"
+                  onClick={() => onAddColumn(option)}
+                >
+                  {option}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         {activeCount > 0 && (
           <button onClick={onReset} className="text-xs text-red-600 hover:underline font-medium">
             Reset All

@@ -20,6 +20,12 @@ export function ScreenersDropdown({ isActive }: ScreenersDropdownProps) {
         <div className="min-w-[200px] border-r border-gray-300">
           <div className="px-4 py-2 text-sm font-bold text-black border-b border-gray-300 bg-gray-50">Technical</div>
 
+          <div className="border-b border-gray-300">
+            {screenersLinks.technical.screeningTable.map((link) => (
+              <Link key={link.label} href={link.href} className={linkClass}>{link.label}</Link>
+            ))}
+          </div>
+
           {/* Candlestick Patterns */}
           <div className="border-b border-gray-300">
             <div className={sectionHeader}>Candlestick Patterns</div>

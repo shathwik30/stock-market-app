@@ -196,6 +196,11 @@ export function NavMobile({ user, onLogout, onClose }: NavMobileProps) {
                   Technical
                 </div>
                 <div className="mb-2">
+                  {screenersLinks.technical.screeningTable.map((link) => (
+                    <Link key={link.label} href={link.href} onClick={closeAll} className="block py-2 pl-2 text-sm rounded-lg transition-colors text-muted-foreground hover:text-foreground hover:bg-secondary/50">{link.label}</Link>
+                  ))}
+                </div>
+                <div className="mb-2">
                   <div className="py-1 text-xs font-semibold text-muted-foreground">Candlestick Patterns</div>
                   {screenersLinks.technical.candlestickPatterns.map((link) => (
                     <Link key={link.label} href={link.href} onClick={closeAll} className="block py-2 pl-2 text-sm rounded-lg transition-colors text-muted-foreground hover:text-foreground hover:bg-secondary/50">{link.label}</Link>
