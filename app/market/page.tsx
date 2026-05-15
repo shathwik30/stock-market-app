@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Download, RefreshCw, Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Download, RefreshCw, Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CalendarDays } from 'lucide-react';
+import { DayPicker, type DateRange } from 'react-day-picker';
 import FilterPanel, { type FilterState, type FilterOptions, emptyFilters, emptyFilterOptions } from '@/components/FilterPanel';
 
 // Time period tabs
@@ -31,39 +32,12 @@ const columnsByPeriod: Record<TimePeriod | SubTab, string[]> = {
 const baseColumns = ['S No', 'Company Name', 'Sector', 'Industry', 'Group', 'F V', 'P Band', 'M Cap', 'Pre Close', 'CMP', 'Net Chag'];
 const TOGGLEABLE_COLUMNS = ['Sector', 'Industry', 'Group', 'F V', 'P Band', 'M Cap', 'Pre Close'];
 
-// Two-month calendar helpers for the Customize Date picker
-const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-const buildMonthGrid = (year: number, month: number): (Date | null)[] => {
-  const first = new Date(year, month, 1);
-  const last = new Date(year, month + 1, 0);
-  const daysInMonth = last.getDate();
-  // JS getDay: 0=Sun..6=Sat. Shift so Monday=0.
-  const offset = (first.getDay() + 6) % 7;
-  const cells: (Date | null)[] = [];
-  for (let i = 0; i < offset; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
-};
-
-const toIsoDate = (d: Date): string => {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-};
-
+// Calendar input helper for the Customize Date picker.
 const toDisplayDate = (d: Date): string => {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${dd}/${mm}/${d.getFullYear()}`;
 };
-
-const addMonths = (d: Date, n: number): Date => new Date(d.getFullYear(), d.getMonth() + n, 1);
-
-const formatMonthYear = (d: Date): string =>
-  d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
 interface StockData {
   id: string;
@@ -696,222 +670,200 @@ function MarketPageContent() {
         {isCustomDatePopupOpen && (() => {
           const startIso = parseDisplayDate(startDateInput).iso;
           const endIso = parseDisplayDate(endDateInput).iso;
-          const todayIso = toIsoDate(new Date());
-          const leftMonth = calendarMonth;
-          const rightMonth = addMonths(calendarMonth, 1);
-          const leftCells = buildMonthGrid(leftMonth.getFullYear(), leftMonth.getMonth());
-          const rightCells = buildMonthGrid(rightMonth.getFullYear(), rightMonth.getMonth());
+          const selectedRange: DateRange | undefined = startIso
+            ? {
+                from: new Date(`${startIso}T00:00:00`),
+                to: endIso ? new Date(`${endIso}T00:00:00`) : undefined,
+              }
+            : undefined;
 
-          const handleDateClick = (d: Date) => {
-            const iso = toIsoDate(d);
-            const display = toDisplayDate(d);
-            // Start a fresh selection if nothing set, or both already set
-            if (!startIso || (startIso && endIso)) {
-              setStartDateInput(display);
-              setEndDateInput('');
-              setDateError('');
-              return;
-            }
-            // Start set, end not set
-            if (iso < startIso) {
-              setStartDateInput(display);
-              setEndDateInput('');
-              setDateError('');
-              return;
-            }
-            setEndDateInput(display);
+          const applyDateRange = () => {
+            const start = parseDisplayDate(startDateInput);
+            const end = parseDisplayDate(endDateInput);
+            if (!start.valid) { setDateError('Invalid Start Date. Use DD/MM/YYYY.'); return; }
+            if (!end.valid) { setDateError('Invalid End Date. Use DD/MM/YYYY.'); return; }
+            if (!start.iso && !end.iso) { setDateError('Enter at least a Start Date.'); return; }
+            if (!start.iso) { setDateError('Start Date is required.'); return; }
+            if (end.iso && start.iso > end.iso) { setDateError('Start Date must be before End Date.'); return; }
+            const today = new Date().toISOString().split('T')[0];
+            if (start.iso > today) { setDateError('Start Date cannot be in the future.'); return; }
+            if (end.iso && end.iso > today) { setDateError('End Date cannot be in the future.'); return; }
             setDateError('');
+            setCustomDate(start.iso);
+            setCustomEndDate(end.iso);
+            setCurrentPage(1);
+            setIsCustomDatePopupOpen(false);
           };
-
-          const getCellClass = (d: Date | null): string => {
-            if (!d) return 'invisible';
-            const iso = toIsoDate(d);
-            const isStart = iso === startIso;
-            const isEnd = iso === endIso;
-            const inRange = startIso && endIso && iso > startIso && iso < endIso;
-            const isToday = iso === todayIso;
-
-            let cls = 'w-9 h-9 flex items-center justify-center text-sm cursor-pointer transition-colors ';
-            if (isStart || isEnd) {
-              cls += 'bg-[#1256A0] text-white font-semibold rounded-full ';
-            } else if (inRange) {
-              cls += 'bg-blue-50 text-[#1256A0] ';
-            } else {
-              cls += 'text-gray-700 hover:bg-gray-100 rounded-full ';
-            }
-            if (isToday && !isStart && !isEnd) {
-              cls += 'underline ';
-            }
-            return cls;
-          };
-
-          const renderMonth = (cells: (Date | null)[]) => (
-            <div className="grid grid-cols-7 gap-y-1">
-              {WEEKDAY_LABELS.map((d, i) => (
-                <div key={i} className="w-9 h-8 flex items-center justify-center text-xs text-gray-500 font-medium">
-                  {d}
-                </div>
-              ))}
-              {cells.map((cell, i) => (
-                <div key={i} className="flex items-center justify-center">
-                  {cell ? (
-                    <button
-                      type="button"
-                      onClick={() => handleDateClick(cell)}
-                      className={getCellClass(cell)}
-                    >
-                      {cell.getDate()}
-                    </button>
-                  ) : (
-                    <div className="w-9 h-9" />
-                  )}
-                </div>
-              ))}
-            </div>
-          );
 
           return (
             <div
               ref={customDatePopupRef}
-              className="absolute top-full left-0 z-50 mt-2 border border-gray-300 rounded-lg p-5 bg-white shadow-xl"
+              className="absolute top-full left-0 z-50 mt-2 w-[min(760px,calc(100vw-2rem))] border border-black bg-white shadow-[0_18px_50px_rgba(0,0,0,0.16)]"
               style={{ left: customDateTabRef.current?.offsetLeft ?? 0 }}
             >
-              {/* Two-month calendar */}
-              <div className="flex items-start gap-8">
-                {/* Left month */}
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <button
-                      type="button"
-                      onClick={() => setCalendarMonth(addMonths(calendarMonth, -1))}
-                      className="p-1 text-gray-700 hover:bg-gray-100 rounded"
-                      aria-label="Previous month"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <span className="text-sm font-semibold text-gray-900">{formatMonthYear(leftMonth)}</span>
-                    <div className="w-7" />
+              <div className="flex items-center justify-between border-b border-black px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center border border-black bg-black text-white">
+                    <CalendarDays className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-black">Customize Date</p>
+                    <p className="text-[11px] text-gray-500">Compare market performance between two dates</p>
                   </div>
-                  {renderMonth(leftCells)}
                 </div>
-                {/* Right month */}
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-7" />
-                    <span className="text-sm font-semibold text-gray-900">{formatMonthYear(rightMonth)}</span>
-                    <button
-                      type="button"
-                      onClick={() => setCalendarMonth(addMonths(calendarMonth, 1))}
-                      className="p-1 text-gray-700 hover:bg-gray-100 rounded"
-                      aria-label="Next month"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  </div>
-                  {renderMonth(rightCells)}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCustomDatePopupOpen(false)}
+                  className="h-8 px-3 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-black"
+                >
+                  Close
+                </button>
               </div>
 
-              {/* Divider */}
-              <div className="border-t border-gray-200 mt-4 pt-3">
-                {/* Today / Clear row */}
-                <div className="flex items-center justify-between mb-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const t = new Date();
-                      setStartDateInput(toDisplayDate(t));
-                      setEndDateInput('');
-                      setCalendarMonth(new Date(t.getFullYear(), t.getMonth(), 1));
+              <div className="grid md:grid-cols-[1fr_250px]">
+                <div className="p-4">
+                  <DayPicker
+                    mode="range"
+                    selected={selectedRange}
+                    month={calendarMonth}
+                    onMonthChange={setCalendarMonth}
+                    onSelect={(range) => {
+                      if (!range?.from) return;
+                      setStartDateInput(toDisplayDate(range.from));
+                      setEndDateInput(range.to ? toDisplayDate(range.to) : '');
                       setDateError('');
                     }}
-                    className="text-sm font-medium text-[#1256A0] hover:underline"
-                  >
-                    Today
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStartDateInput('');
-                      setEndDateInput('');
-                      setDateError('');
-                      if (customDate || customEndDate) {
-                        setCustomDate('');
-                        setCustomEndDate('');
-                        setCurrentPage(1);
-                      }
+                    numberOfMonths={2}
+                    pagedNavigation
+                    captionLayout="dropdown"
+                    startMonth={new Date(1990, 0)}
+                    endMonth={new Date()}
+                    disabled={{ after: new Date() }}
+                    showOutsideDays
+                    classNames={{
+                      root: 'w-full',
+                      months: 'flex flex-col gap-6 md:flex-row md:gap-8',
+                      month: 'space-y-3',
+                      month_caption: 'relative flex h-9 items-center justify-center',
+                      caption_label: 'text-sm font-semibold text-black',
+                      dropdowns: 'flex items-center justify-center gap-2',
+                      dropdown_root: 'relative',
+                      dropdown: 'h-8 appearance-none border border-gray-300 bg-white px-2 pr-7 text-xs font-semibold text-black outline-none transition-colors hover:border-black focus:border-black focus:ring-1 focus:ring-black',
+                      months_dropdown: 'min-w-[92px]',
+                      years_dropdown: 'min-w-[76px]',
+                      nav: 'absolute inset-x-4 top-[76px] flex items-center justify-between md:inset-x-5',
+                      button_previous: 'inline-flex h-8 w-8 items-center justify-center border border-gray-300 bg-white text-gray-700 transition-colors hover:border-black hover:bg-gray-100',
+                      button_next: 'inline-flex h-8 w-8 items-center justify-center border border-gray-300 bg-white text-gray-700 transition-colors hover:border-black hover:bg-gray-100',
+                      chevron: 'h-4 w-4',
+                      month_grid: 'w-full border-collapse',
+                      weekdays: 'flex',
+                      weekday: 'flex h-8 w-9 items-center justify-center text-[11px] font-medium text-gray-500',
+                      week: 'mt-1 flex w-full',
+                      day: 'relative h-9 w-9 p-0 text-center text-sm',
+                      day_button: 'h-9 w-9 rounded-md text-sm font-medium text-gray-800 transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black',
+                      today: 'font-bold text-black after:absolute after:bottom-1 after:left-1/2 after:h-1 after:w-1 after:-translate-x-1/2 after:rounded-full after:bg-black',
+                      outside: 'text-gray-300 opacity-60',
+                      disabled: 'pointer-events-none text-gray-300 opacity-40',
+                      selected: 'bg-black text-white',
+                      range_start: 'rounded-l-md bg-black text-white',
+                      range_end: 'rounded-r-md bg-black text-white',
+                      range_middle: 'rounded-none bg-gray-100 text-black',
                     }}
-                    className="text-sm font-medium text-gray-500 hover:text-gray-700"
-                  >
-                    Clear
-                  </button>
+                  />
                 </div>
 
-                {/* Start/End inputs + Apply */}
-                <div className="flex flex-wrap items-end gap-4">
-                  <div className="flex flex-col">
-                    <label className="text-xs text-gray-600 mb-1">Start Date</label>
-                    <input
-                      type="text"
-                      value={startDateInput}
-                      onChange={(e) => { setStartDateInput(e.target.value); setDateError(''); }}
-                      placeholder="DD/MM/YYYY"
-                      className="border border-gray-300 rounded px-3 py-2 bg-white text-sm text-black placeholder-gray-400 focus:outline-none focus:border-[#1256A0] focus:ring-1 focus:ring-[#1256A0] w-36"
-                    />
+                <div className="border-t border-gray-200 bg-gray-50 p-4 md:border-l md:border-t-0">
+                  <div className="mb-4 border border-gray-200 bg-white px-3 py-2">
+                    <p className="text-[11px] font-medium uppercase text-gray-500">Selected range</p>
+                    <p className="mt-1 text-sm font-semibold text-black">
+                      {startDateInput || 'Start date'} {endDateInput ? `to ${endDateInput}` : 'to today'}
+                    </p>
                   </div>
-                  <div className="flex flex-col">
-                    <label className="text-xs text-gray-600 mb-1">End Date</label>
-                    <input
-                      type="text"
-                      value={endDateInput}
-                      onChange={(e) => { setEndDateInput(e.target.value); setDateError(''); }}
-                      placeholder="DD/MM/YYYY"
-                      className="border border-gray-300 rounded px-3 py-2 bg-white text-sm text-black placeholder-gray-400 focus:outline-none focus:border-[#1256A0] focus:ring-1 focus:ring-[#1256A0] w-36"
-                    />
+
+                  <div className="mb-4 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const t = new Date();
+                        setStartDateInput(toDisplayDate(t));
+                        setEndDateInput('');
+                        setCalendarMonth(new Date(t.getFullYear(), t.getMonth(), 1));
+                        setDateError('');
+                      }}
+                      className="h-8 flex-1 border border-gray-300 bg-white text-xs font-medium text-black hover:border-black hover:bg-gray-100"
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStartDateInput('');
+                        setEndDateInput('');
+                        setDateError('');
+                        if (customDate || customEndDate) {
+                          setCustomDate('');
+                          setCustomEndDate('');
+                          setCurrentPage(1);
+                        }
+                      }}
+                      className="h-8 flex-1 border border-gray-300 bg-white text-xs font-medium text-gray-700 hover:border-black hover:text-black"
+                    >
+                      Clear
+                    </button>
                   </div>
+
+                  <div className="space-y-3">
+                    <div className="flex flex-col">
+                      <label className="mb-1 text-xs font-medium text-gray-600">Start Date</label>
+                      <input
+                        type="text"
+                        value={startDateInput}
+                        onChange={(e) => { setStartDateInput(e.target.value); setDateError(''); }}
+                        placeholder="DD/MM/YYYY"
+                        className="h-9 border border-gray-300 bg-white px-3 text-sm text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <label className="mb-1 text-xs font-medium text-gray-600">End Date</label>
+                      <input
+                        type="text"
+                        value={endDateInput}
+                        onChange={(e) => { setEndDateInput(e.target.value); setDateError(''); }}
+                        placeholder="DD/MM/YYYY"
+                        className="h-9 border border-gray-300 bg-white px-3 text-sm text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+                      />
+                    </div>
+                  </div>
+
+                  {dateError && (
+                    <p className="mt-3 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{dateError}</p>
+                  )}
+                  {!dateError && customDate && (
+                    <p className="mt-3 text-xs leading-5 text-gray-600">
+                      Active: <strong className="text-black">{new Date(customDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
+                      {' '}to{' '}
+                      <strong className="text-black">
+                        {customEndDate
+                          ? new Date(customEndDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                          : 'today'}
+                      </strong>
+                    </p>
+                  )}
+
                   <button
                     type="button"
-                    onClick={() => {
-                      const start = parseDisplayDate(startDateInput);
-                      const end = parseDisplayDate(endDateInput);
-                      if (!start.valid) { setDateError('Invalid Start Date. Use DD/MM/YYYY.'); return; }
-                      if (!end.valid) { setDateError('Invalid End Date. Use DD/MM/YYYY.'); return; }
-                      if (!start.iso && !end.iso) { setDateError('Enter at least a Start Date.'); return; }
-                      if (!start.iso) { setDateError('Start Date is required.'); return; }
-                      if (end.iso && start.iso > end.iso) { setDateError('Start Date must be before End Date.'); return; }
-                      const today = new Date().toISOString().split('T')[0];
-                      if (start.iso > today) { setDateError('Start Date cannot be in the future.'); return; }
-                      if (end.iso && end.iso > today) { setDateError('End Date cannot be in the future.'); return; }
-                      setDateError('');
-                      setCustomDate(start.iso);
-                      setCustomEndDate(end.iso);
-                      setCurrentPage(1);
-                      setIsCustomDatePopupOpen(false);
-                    }}
-                    className="px-6 py-2 border-2 border-[#1256A0] text-[#1256A0] font-semibold text-sm rounded hover:bg-[#1256A0] hover:text-white transition-colors"
+                    onClick={applyDateRange}
+                    className="mt-5 h-9 w-full bg-black px-4 text-sm font-semibold text-white transition-colors hover:bg-gray-800"
                   >
                     Apply
                   </button>
                 </div>
+              </div>
 
-                {dateError && (
-                  <p className="text-xs text-red-600 mt-3">{dateError}</p>
-                )}
-                {!dateError && customDate && (
-                  <p className="text-xs text-gray-600 mt-3">
-                    Showing % change from{' '}
-                    <strong className="text-black">{new Date(customDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
-                    {' '}to{' '}
-                    <strong className="text-black">
-                      {customEndDate
-                        ? new Date(customEndDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-                        : 'today'}
-                    </strong>
-                  </p>
-                )}
-                {!dateError && !customDate && (
-                  <p className="text-xs text-gray-400 mt-3">Pick dates on the calendar or type them, then click Apply to compare stock performance between the two dates.</p>
-                )}
+              <div className="border-t border-gray-200 px-4 py-2">
+                <p className="text-[11px] text-gray-500">
+                  Pick a start date and optional end date. Leaving the end date empty compares the start date with today.
+                </p>
               </div>
             </div>
           );
@@ -920,7 +872,7 @@ function MarketPageContent() {
 
         {/* Active custom date indicator */}
         {customDate && !isCustomDatePopupOpen && (
-          <div className="mb-4 flex items-center gap-3 text-xs border border-gray-300 rounded px-3 py-2 bg-yellow-50">
+          <div className="mb-4 flex items-center gap-3 border border-black bg-gray-50 px-3 py-2 text-xs">
             <span className="text-gray-700">
               Custom date active:{' '}
               <strong className="text-black">{new Date(customDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
@@ -931,8 +883,8 @@ function MarketPageContent() {
                   : 'today'}
               </strong>
             </span>
-            <button onClick={() => { setActiveTab('custom'); setIsCustomDatePopupOpen(true); }} className="text-blue-600 hover:text-blue-800 underline">Change</button>
-            <button onClick={() => { setCustomDate(''); setCustomEndDate(''); setStartDateInput(''); setEndDateInput(''); setCurrentPage(1); }} className="text-red-600 hover:text-red-800 underline">Clear</button>
+            <button onClick={() => { setActiveTab('custom'); setIsCustomDatePopupOpen(true); }} className="font-medium text-black underline underline-offset-2 hover:text-gray-600">Change</button>
+            <button onClick={() => { setCustomDate(''); setCustomEndDate(''); setStartDateInput(''); setEndDateInput(''); setCurrentPage(1); }} className="font-medium text-red-600 underline underline-offset-2 hover:text-red-800">Clear</button>
           </div>
         )}
 
