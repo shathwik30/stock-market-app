@@ -587,8 +587,8 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
     }
     setActiveTab(tab);
     setCurrentPage(1);
-    // Reset sort to daily % change when switching tabs
-    setSortCol('pctChange');
+    // Reset sort to the tab's primary ranking column when switching tabs.
+    setSortCol(tab === 'custom' && customDate ? '% Cust Date Chag' : 'pctChange');
     setSortOrder('desc');
     setIsCustomDatePopupOpen(tab === 'custom');
   };
@@ -749,6 +749,8 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
             setDateError('');
             setCustomDate(start.iso);
             setCustomEndDate(end.iso);
+            setSortCol('% Cust Date Chag');
+            setSortOrder('desc');
             setCurrentPage(1);
             setIsCustomDatePopupOpen(false);
           };
@@ -861,6 +863,8 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
                         if (customDate || customEndDate) {
                           setCustomDate('');
                           setCustomEndDate('');
+                          setSortCol('pctChange');
+                          setSortOrder('desc');
                           setCurrentPage(1);
                         }
                       }}
@@ -942,7 +946,7 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
               </strong>
             </span>
             <button onClick={() => { setActiveTab('custom'); setIsCustomDatePopupOpen(true); }} className="font-medium text-black underline underline-offset-2 hover:text-gray-600">Change</button>
-            <button onClick={() => { setCustomDate(''); setCustomEndDate(''); setStartDateInput(''); setEndDateInput(''); setCurrentPage(1); }} className="font-medium text-red-600 underline underline-offset-2 hover:text-red-800">Clear</button>
+            <button onClick={() => { setCustomDate(''); setCustomEndDate(''); setStartDateInput(''); setEndDateInput(''); setSortCol('pctChange'); setSortOrder('desc'); setCurrentPage(1); }} className="font-medium text-red-600 underline underline-offset-2 hover:text-red-800">Clear</button>
           </div>
         )}
 

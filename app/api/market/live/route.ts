@@ -44,9 +44,22 @@ const SORT_MAP: Record<string, string> = {
 };
 
 // Map for % change column sorts (JSONB field)
-function getSortClause(sort: string, order: string): string {
+function getSortClause(
+  sort: string,
+  order: string,
+  customSort?: { pctExpr: string; netExpr: string }
+): string {
   const dir = order === 'asc' ? 'ASC' : 'DESC';
   const nulls = order === 'asc' ? 'NULLS LAST' : 'NULLS LAST';
+
+  if (customSort) {
+    if (sort === 'pctChange' || sort === '% Cust Date Chag') {
+      return `${customSort.pctExpr} ${dir} ${nulls}`;
+    }
+    if (sort === 'netChange') {
+      return `${customSort.netExpr} ${dir} ${nulls}`;
+    }
+  }
 
   // Direct column sort
   if (SORT_MAP[sort]) {
@@ -146,7 +159,48 @@ export async function GET(request: NextRequest) {
 
     const baseWhere = baseConditions.length > 0 ? `WHERE ${baseConditions.join(' AND ')}` : '';
     const fullWhere = fullConditions.length > 0 ? `WHERE ${fullConditions.join(' AND ')}` : '';
-    const orderClause = getSortClause(sort, order);
+    const startTs = customDate ? Math.floor(new Date(customDate + 'T00:00:00Z').getTime() / 1000) : null;
+    const endTs = customEndDate
+      ? Math.floor(new Date(customEndDate + 'T00:00:00Z').getTime() / 1000)
+      : null;
+    const hasCustomDateRange =
+      startTs !== null &&
+      isFinite(startTs) &&
+      startTs > 0 &&
+      (endTs === null || (isFinite(endTs) && endTs >= startTs));
+    const customCompareExpr = endTs !== null ? '"customEnd"."close"' : '"lastPrice"';
+    const customNetExpr = `CASE WHEN "customStart"."close" IS NOT NULL AND "customStart"."close" > 0 AND ${customCompareExpr} IS NOT NULL AND ${customCompareExpr} > 0 THEN (${customCompareExpr} - "customStart"."close") ELSE NULL END`;
+    const customPctExpr = `CASE WHEN "customStart"."close" IS NOT NULL AND "customStart"."close" > 0 AND ${customCompareExpr} IS NOT NULL AND ${customCompareExpr} > 0 THEN ((${customCompareExpr} - "customStart"."close") / "customStart"."close" * 100) ELSE NULL END`;
+    const customJoin = hasCustomDateRange
+      ? `LEFT JOIN LATERAL (
+           SELECT hp.closes[i] as "close"
+           FROM "HistoricalPrice" hp, generate_subscripts(hp.timestamps, 1) i
+           WHERE hp."securityId" = "LiveQuote"."securityId"
+             AND hp."exchangeSegment" = "LiveQuote"."exchangeSegment"
+             AND hp.timestamps[i] <= ${startTs}
+           ORDER BY hp.timestamps[i] DESC
+           LIMIT 1
+         ) "customStart" ON true
+         ${endTs !== null
+           ? `LEFT JOIN LATERAL (
+                SELECT hp.closes[i] as "close"
+                FROM "HistoricalPrice" hp, generate_subscripts(hp.timestamps, 1) i
+                WHERE hp."securityId" = "LiveQuote"."securityId"
+                  AND hp."exchangeSegment" = "LiveQuote"."exchangeSegment"
+                  AND hp.timestamps[i] <= ${endTs}
+                ORDER BY hp.timestamps[i] DESC
+                LIMIT 1
+              ) "customEnd" ON true`
+           : ''}`
+      : '';
+    const customSelect = hasCustomDateRange
+      ? `, ${customNetExpr} as "customNetChange", ${customPctExpr} as "customPctChange"`
+      : '';
+    const orderClause = getSortClause(
+      sort,
+      order,
+      hasCustomDateRange ? { pctExpr: customPctExpr, netExpr: customNetExpr } : undefined
+    );
     const offset = (page - 1) * pageSize;
 
     // ── Count breakdown (for tab labels) + fetch rows — in parallel ──
@@ -164,7 +218,8 @@ export async function GET(request: NextRequest) {
                 "displayName", "tradingSymbol", sector, industry, series, "faceValue",
                 "priceBand", "marketCapValue", "prevClose", "lastPrice", "netChange",
                 "pctChange", "percentChanges", "week52High", "week52Low", volume
-         FROM "LiveQuote" ${fullWhere} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
+                ${customSelect}
+         FROM "LiveQuote" ${customJoin} ${fullWhere} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
       ),
     ]);
 
@@ -179,97 +234,36 @@ export async function GET(request: NextRequest) {
     const totalPages = Math.ceil(totalStocks / pageSize);
 
     // Transform DB rows to frontend DTO
-    const stocks: StockQuoteDTO[] = rows.map((row, idx) => ({
-      id: String(offset + idx + 1),
-      companyName: row.displayName as string,
-      tradingSymbol: row.tradingSymbol as string,
-      sector: (row.sector as string) || '-',
-      industry: (row.industry as string) || '-',
-      group: (row.series as string) || '',
-      faceValue: Number(row.faceValue) || 1,
-      priceBand: (row.priceBand as string) || 'No Band',
-      marketCap: formatMarketCap(Number(row.marketCapValue) || 0),
-      preClose: Math.round(Number(row.prevClose) * 100) / 100,
-      cmp: Math.round(Number(row.lastPrice) * 100) / 100,
-      netChange: Math.round(Number(row.netChange) * 100) / 100,
-      percentChange: Math.round(Number(row.pctChange) * 100) / 100,
-      percentChanges: (row.percentChanges as Record<string, number | null>) || {},
-      week52High: row.week52High != null ? Number(row.week52High) : undefined,
-      week52Low: row.week52Low != null ? Number(row.week52Low) : undefined,
-      volume: Number(row.volume) || 0,
-    }));
+    const stocks: StockQuoteDTO[] = rows.map((row, idx) => {
+      const percentChanges = { ...((row.percentChanges as Record<string, number | null>) || {}) };
+      const customNetChange = row.customNetChange == null ? null : Math.round(Number(row.customNetChange) * 100) / 100;
+      const customPctChange = row.customPctChange == null ? null : Math.round(Number(row.customPctChange) * 100) / 100;
 
-    // ── Custom date % change (override % Cust Date Chag for the current page) ──
-    if (customDate && stocks.length > 0) {
-      const startTs = Math.floor(new Date(customDate + 'T00:00:00Z').getTime() / 1000);
-      const endTs = customEndDate
-        ? Math.floor(new Date(customEndDate + 'T00:00:00Z').getTime() / 1000)
-        : null;
-      if (isFinite(startTs) && startTs > 0 && (endTs === null || (isFinite(endTs) && endTs >= startTs))) {
-        const secIds = rows.map(r => parseInt(String(r.securityId))).filter(n => isFinite(n) && n > 0);
-        if (secIds.length > 0) {
-          try {
-            const endSelect = endTs !== null
-              ? `(SELECT hp.closes[i]
-                   FROM generate_subscripts(hp.timestamps, 1) i
-                   WHERE hp.timestamps[i] <= ${endTs}
-                   ORDER BY i DESC
-                   LIMIT 1
-                  ) as "endClose"`
-              : `NULL::double precision as "endClose"`;
-            const histRows = await prisma.$queryRawUnsafe<Array<{
-              securityId: number;
-              exchangeSegment: string;
-              startClose: number | null;
-              endClose: number | null;
-            }>>(`
-              SELECT hp."securityId", hp."exchangeSegment",
-                (SELECT hp.closes[i]
-                 FROM generate_subscripts(hp.timestamps, 1) i
-                 WHERE hp.timestamps[i] <= ${startTs}
-                 ORDER BY i DESC
-                 LIMIT 1
-                ) as "startClose",
-                ${endSelect}
-              FROM "HistoricalPrice" hp
-              WHERE hp."securityId" IN (${secIds.join(',')})
-            `);
-
-            const closeMap = new Map<string, { start: number; end: number | null }>();
-            for (const h of histRows) {
-              if (h.startClose != null && h.startClose > 0) {
-                closeMap.set(`${h.securityId}:${h.exchangeSegment}`, {
-                  start: h.startClose,
-                  end: h.endClose != null && h.endClose > 0 ? h.endClose : null,
-                });
-              }
-            }
-
-            for (let i = 0; i < stocks.length; i++) {
-              const key = `${rows[i].securityId}:${rows[i].exchangeSegment}`;
-              const entry = closeMap.get(key);
-              if (entry && entry.start > 0) {
-                // When end date provided, compare start → end close. Otherwise compare start → CMP.
-                const compareTo = endTs !== null ? entry.end : stocks[i].cmp;
-                if (compareTo && compareTo > 0) {
-                  stocks[i].customNetChange = Math.round((compareTo - entry.start) * 100) / 100;
-                  stocks[i].percentChanges['% Cust Date Chag'] =
-                    Math.round(((compareTo - entry.start) / entry.start) * 10000) / 100;
-                } else {
-                  stocks[i].customNetChange = null;
-                  stocks[i].percentChanges['% Cust Date Chag'] = null;
-                }
-              } else {
-                stocks[i].customNetChange = null;
-                stocks[i].percentChanges['% Cust Date Chag'] = null;
-              }
-            }
-          } catch (e) {
-            console.error('[API:market/live] Custom date query error:', e instanceof Error ? e.message : e);
-          }
-        }
+      if (hasCustomDateRange) {
+        percentChanges['% Cust Date Chag'] = customPctChange;
       }
-    }
+
+      return {
+        id: String(offset + idx + 1),
+        companyName: row.displayName as string,
+        tradingSymbol: row.tradingSymbol as string,
+        sector: (row.sector as string) || '-',
+        industry: (row.industry as string) || '-',
+        group: (row.series as string) || '',
+        faceValue: Number(row.faceValue) || 1,
+        priceBand: (row.priceBand as string) || 'No Band',
+        marketCap: formatMarketCap(Number(row.marketCapValue) || 0),
+        preClose: Math.round(Number(row.prevClose) * 100) / 100,
+        cmp: Math.round(Number(row.lastPrice) * 100) / 100,
+        netChange: Math.round(Number(row.netChange) * 100) / 100,
+        customNetChange: hasCustomDateRange ? customNetChange : undefined,
+        percentChange: Math.round(Number(row.pctChange) * 100) / 100,
+        percentChanges,
+        week52High: row.week52High != null ? Number(row.week52High) : undefined,
+        week52Low: row.week52Low != null ? Number(row.week52Low) : undefined,
+        volume: Number(row.volume) || 0,
+      };
+    });
 
     // Get pre-computed stats from MarketStats table
     const statsExchange = exchange === 'Both' ? 'Both' : exchange;
