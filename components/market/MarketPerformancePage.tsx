@@ -4,7 +4,14 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Download, RefreshCw, Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CalendarDays } from 'lucide-react';
 import { DayPicker, type DateRange } from 'react-day-picker';
-import FilterPanel, { type FilterState, type FilterOptions, emptyFilters, emptyFilterOptions } from '@/components/FilterPanel';
+import FilterPanel, {
+  type AddColumnGroupOption,
+  type AddColumnSelection,
+  type FilterState,
+  type FilterOptions,
+  emptyFilters,
+  emptyFilterOptions,
+} from '@/components/FilterPanel';
 
 // Time period tabs
 type TimePeriod = 'intraday' | 'days' | 'weeks' | 'months' | 'years' | 'customize';
@@ -32,36 +39,142 @@ const columnsByPeriod: Record<TimePeriod | SubTab, string[]> = {
 const baseColumns = ['S No', 'Company Name', 'Sector', 'Industry', 'Group', 'F V', 'P Band', 'M Cap', 'Pre Close', 'CMP', 'Net Chag'];
 const TOGGLEABLE_COLUMNS = ['Sector', 'Industry', 'Group', 'F V', 'P Band', 'M Cap', 'Pre Close'];
 
-const ADD_COLUMN_OPTIONS = [
-  'Timeframe',
-  'Candlesticks',
-  'Indicators',
-  'Chart Patterns',
-  'Drawing Tools',
-  'Strategies Builder',
-  'Filterings',
+const ADD_TIMEFRAMES = [
+  { id: 'tf-15min', label: 'TF 15min', changeLabel: 'Change' },
+  { id: 'tf-1hour', label: 'TF 1hour', changeLabel: 'Change' },
+  { id: 'tf-1day', label: 'TF 1day', changeLabel: 'Change' },
+  { id: 'tf-1week', label: 'TF 1week', changeLabel: 'Change' },
+] as const;
+
+const ADD_COLUMN_GROUPS: AddColumnGroupOption[] = [
+  {
+    id: 'candlesticks',
+    label: 'Candlesticks',
+    items: [
+      { id: 'bullish-engulfing', label: 'Bullish Engulfing' },
+      { id: 'bearish-engulfing', label: 'Bearish Engulfing' },
+      { id: 'hammer', label: 'Hammer' },
+      { id: 'shooting-star', label: 'Shooting Star' },
+      { id: 'doji', label: 'Doji' },
+      { id: 'morning-star', label: 'Morning Star' },
+      { id: 'evening-star', label: 'Evening Star' },
+      { id: 'marubozu', label: 'Marubozu' },
+      { id: 'piercing-line', label: 'Piercing Line' },
+      { id: 'dark-cloud-cover', label: 'Dark Cloud Cover' },
+    ],
+  },
+  {
+    id: 'indicators',
+    label: 'Indicators',
+    items: [
+      { id: 'rsi', label: 'RSI' },
+      { id: 'macd', label: 'MACD' },
+      { id: 'ema-20', label: 'EMA 20' },
+      { id: 'ema-50', label: 'EMA 50' },
+      { id: 'sma-200', label: 'SMA 200' },
+      { id: 'supertrend', label: 'Supertrend' },
+      { id: 'vwap', label: 'VWAP' },
+      { id: 'bollinger-bands', label: 'Bollinger Bands' },
+      { id: 'adx', label: 'ADX' },
+      { id: 'stochastic', label: 'Stochastic' },
+      { id: 'atr', label: 'ATR' },
+      { id: 'volume-spike', label: 'Volume Spike' },
+    ],
+  },
+  {
+    id: 'chart-patterns',
+    label: 'Chart Patterns',
+    items: [
+      { id: 'breakout', label: 'Breakout' },
+      { id: 'breakdown', label: 'Breakdown' },
+      { id: 'double-top', label: 'Double Top' },
+      { id: 'double-bottom', label: 'Double Bottom' },
+      { id: 'head-shoulders', label: 'Head & Shoulders' },
+      { id: 'inverse-head-shoulders', label: 'Inverse H&S' },
+      { id: 'triangle', label: 'Triangle' },
+      { id: 'flag', label: 'Flag' },
+    ],
+  },
+  {
+    id: 'drawing-tools',
+    label: 'Drawing Tools',
+    items: [
+      { id: 'trendline', label: 'Trendline' },
+      { id: 'support', label: 'Support' },
+      { id: 'resistance', label: 'Resistance' },
+      { id: 'channel', label: 'Channel' },
+      { id: 'fibonacci', label: 'Fibonacci' },
+      { id: 'pivot-zone', label: 'Pivot Zone' },
+    ],
+  },
+  {
+    id: 'strategies-builder',
+    label: 'Strategies Builder',
+    items: [
+      { id: 'momentum', label: 'Momentum' },
+      { id: 'mean-reversion', label: 'Mean Reversion' },
+      { id: 'breakout-setup', label: 'Breakout Setup' },
+      { id: 'trend-following', label: 'Trend Following' },
+      { id: 'volume-confirmation', label: 'Volume Confirmation' },
+    ],
+  },
+  {
+    id: 'filterings',
+    label: 'Filterings',
+    items: [
+      { id: 'price-range', label: 'Price Range' },
+      { id: 'volume-range', label: 'Volume Range' },
+      { id: 'market-cap-range', label: 'Market Cap Range' },
+      { id: 'sector-filter', label: 'Sector Filter' },
+      { id: 'volatility-filter', label: 'Volatility Filter' },
+    ],
+  },
 ];
 
-const TIMEFRAME_ADDON_COLUMNS = ['TF 15min Change', 'TF 1hour Change', 'TF 1day Change', 'TF 1week Change'];
-const TIMEFRAME_ADDON_PREFIXES = ['TF 15min', 'TF 1hour', 'TF 1day', 'TF 1week'];
-const TECHNICAL_ADDON_OPTIONS = ADD_COLUMN_OPTIONS.filter(option => option !== 'Timeframe');
+const emptyAddColumnSelection: AddColumnSelection = {
+  timeframe: false,
+  groups: {},
+};
 
-const buildAddedColumns = (selectedOptions: string[]): string[] => {
-  const selected = new Set(selectedOptions);
-  const columns: string[] = [];
+interface AddedColumnDef {
+  id: string;
+  timeframeId: string;
+  timeframeLabel: string;
+  label: string;
+  groupLabel: string;
+}
 
-  if (selected.has('Timeframe')) {
-    columns.push(...TIMEFRAME_ADDON_COLUMNS);
-  }
+const buildAddedColumns = (selection: AddColumnSelection): AddedColumnDef[] => {
+  if (!selection.timeframe) return [];
 
-  TECHNICAL_ADDON_OPTIONS.forEach((option) => {
-    if (!selected.has(option)) return;
-    TIMEFRAME_ADDON_PREFIXES.forEach((prefix) => {
-      columns.push(`${prefix} ${option}`);
-    });
+  const selectedItems = ADD_COLUMN_GROUPS.flatMap((group) =>
+    (selection.groups[group.id] || [])
+      .map(itemId => group.items.find(item => item.id === itemId))
+      .filter((item): item is { id: string; label: string } => Boolean(item))
+      .map(item => ({ groupId: group.id, groupLabel: group.label, item }))
+  );
+
+  return ADD_TIMEFRAMES.flatMap((timeframe) => {
+    const baseColumn: AddedColumnDef[] = selection.timeframe
+      ? [{
+          id: `${timeframe.id}:change`,
+          timeframeId: timeframe.id,
+          timeframeLabel: timeframe.label,
+          label: timeframe.changeLabel,
+          groupLabel: 'Timeframe',
+        }]
+      : [];
+
+    const childColumns = selectedItems.map(({ groupId, groupLabel, item }) => ({
+      id: `${timeframe.id}:${groupId}:${item.id}`,
+      timeframeId: timeframe.id,
+      timeframeLabel: timeframe.label,
+      label: item.label,
+      groupLabel,
+    }));
+
+    return [...baseColumn, ...childColumns];
   });
-
-  return columns;
 };
 
 // Calendar input helper for the Customize Date picker.
@@ -255,10 +368,17 @@ const StockTable = ({
   hiddenColumns: Set<string>;
   customDate?: string;
   customEndDate?: string;
-  addedColumns: string[];
+  addedColumns: AddedColumnDef[];
 }) => {
   const visibleBase = baseColumns.filter(c => !hiddenColumns.has(c));
   const visibleColumns = columns.filter(c => !hiddenColumns.has(c));
+  const addedColumnGroups = ADD_TIMEFRAMES
+    .map((timeframe) => ({
+      timeframe,
+      columns: addedColumns.filter(col => col.timeframeId === timeframe.id),
+    }))
+    .filter(group => group.columns.length > 0);
+  const hasGroupedAddedColumns = addedColumns.length > 0;
 
   const SortIcon = ({ col }: { col: string }) => {
     if (sortCol !== col) return null;
@@ -277,6 +397,7 @@ const StockTable = ({
             <tr className="bg-gray-100">
               {visibleBase.map((col) => (
                 <th key={col}
+                  rowSpan={hasGroupedAddedColumns ? 2 : 1}
                   className="border border-gray-400 px-2 py-1 text-black font-semibold text-center whitespace-nowrap bg-gray-100 cursor-pointer hover:bg-gray-200"
                   onClick={() => { if (SORT_MAP_UI[col]) onSort(SORT_MAP_UI[col]); }}
                 >
@@ -295,6 +416,7 @@ const StockTable = ({
                 }
                 return (
                   <th key={col}
+                    rowSpan={hasGroupedAddedColumns ? 2 : 1}
                     className="border border-gray-400 px-2 py-1 text-black font-semibold text-center whitespace-nowrap bg-yellow-100 cursor-pointer hover:bg-yellow-200"
                     onClick={() => onSort(col)}
                   >
@@ -302,15 +424,30 @@ const StockTable = ({
                   </th>
                 );
               })}
-              {addedColumns.map((col) => (
+              {addedColumnGroups.map(({ timeframe, columns: groupColumns }) => (
                 <th
-                  key={col}
-                  className="border border-gray-400 px-2 py-1 text-black font-semibold text-center whitespace-nowrap bg-blue-50"
+                  key={timeframe.id}
+                  colSpan={groupColumns.length}
+                  className="border border-gray-400 px-2 py-1 text-black font-semibold text-center whitespace-nowrap bg-blue-100"
                 >
-                  {col}
+                  {timeframe.label}
                 </th>
               ))}
             </tr>
+            {hasGroupedAddedColumns && (
+              <tr className="bg-blue-50">
+                {addedColumnGroups.flatMap(({ columns: groupColumns }) =>
+                  groupColumns.map((col) => (
+                    <th
+                      key={col.id}
+                      className="border border-gray-400 px-2 py-1 text-black font-semibold text-center whitespace-nowrap bg-blue-50"
+                    >
+                      {col.label}
+                    </th>
+                  ))
+                )}
+              </tr>
+            )}
           </thead>
           <tbody>
             {data.length === 0 ? (
@@ -340,7 +477,7 @@ const StockTable = ({
                       );
                     })}
                     {addedColumns.map((col) => (
-                      <td key={col} className="border border-gray-300 px-2 py-1 text-right text-gray-400">
+                      <td key={col.id} className="border border-gray-300 px-2 py-1 text-right text-gray-400">
                         &nbsp;
                       </td>
                     ))}
@@ -389,7 +526,7 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
   const [filterOptions, setFilterOptions] = useState<FilterOptions>(emptyFilterOptions);
   const [filteredCounts, setFilteredCounts] = useState<{ total: number; gainers: number; losers: number; unchanged: number } | null>(null);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-  const [selectedAddedColumnOptions, setSelectedAddedColumnOptions] = useState<string[]>([]);
+  const [selectedAddColumnConfig, setSelectedAddColumnConfig] = useState<AddColumnSelection>(emptyAddColumnSelection);
   const [customDate, setCustomDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [startDateInput, setStartDateInput] = useState('');
@@ -627,21 +764,15 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
     setCurrentPage(1);
   };
 
-  const addedColumns = buildAddedColumns(selectedAddedColumnOptions);
-
-  const handleAddedColumnOptionChange = (option: string, checked: boolean) => {
-    setSelectedAddedColumnOptions((current) => {
-      if (checked) return current.includes(option) ? current : [...current, option];
-      return current.filter((item) => item !== option);
-    });
-  };
+  const addedColumns = buildAddedColumns(selectedAddColumnConfig);
 
   // CSV Download (respects column visibility)
   const downloadCSV = () => {
     const visibleBase = baseColumns.filter(c => !hiddenColumns.has(c));
     const visiblePeriodColumns = currentColumns.filter(c => !hiddenColumns.has(c));
     const activeAddedColumns = enableAddColumns ? addedColumns : [];
-    const allColumns = [...visibleBase, ...visiblePeriodColumns, ...activeAddedColumns];
+    const addedColumnLabels = activeAddedColumns.map(col => `${col.timeframeLabel} ${col.label}`);
+    const allColumns = [...visibleBase, ...visiblePeriodColumns, ...addedColumnLabels];
     const headers = allColumns.join(',');
 
     const csvLines: string[] = [];
@@ -1033,9 +1164,9 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
           hiddenColumns={hiddenColumns}
           onHiddenColumnsChange={setHiddenColumns}
           toggleableColumns={toggleableColumnsForTab}
-          addColumnOptions={enableAddColumns ? ADD_COLUMN_OPTIONS : undefined}
-          selectedAddedColumnOptions={enableAddColumns ? selectedAddedColumnOptions : undefined}
-          onAddedColumnOptionChange={enableAddColumns ? handleAddedColumnOptionChange : undefined}
+          addColumnGroups={enableAddColumns ? ADD_COLUMN_GROUPS : undefined}
+          selectedAddColumnConfig={enableAddColumns ? selectedAddColumnConfig : undefined}
+          onAddColumnConfigChange={enableAddColumns ? setSelectedAddColumnConfig : undefined}
         />
 
         {/* Loading State */}

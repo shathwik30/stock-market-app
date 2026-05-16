@@ -151,14 +151,6 @@ export async function GET(request: NextRequest) {
     if (isFinite(changeMax)) baseConditions.push(`"pctChange" <= ${changeMax}`);
     if (isFinite(volumeMin)) baseConditions.push(`volume >= ${volumeMin}`);
 
-    // View filter (gainers/losers/unchanged) — only in full conditions
-    const fullConditions = [...baseConditions];
-    if (filter === 'gainers') fullConditions.push(`"netChange" > 0`);
-    else if (filter === 'losers') fullConditions.push(`"netChange" < 0`);
-    else if (filter === 'unchanged') fullConditions.push(`"netChange" = 0`);
-
-    const baseWhere = baseConditions.length > 0 ? `WHERE ${baseConditions.join(' AND ')}` : '';
-    const fullWhere = fullConditions.length > 0 ? `WHERE ${fullConditions.join(' AND ')}` : '';
     const startTs = customDate ? Math.floor(new Date(customDate + 'T00:00:00Z').getTime() / 1000) : null;
     const endTs = customEndDate
       ? Math.floor(new Date(customEndDate + 'T00:00:00Z').getTime() / 1000)
@@ -168,7 +160,17 @@ export async function GET(request: NextRequest) {
       isFinite(startTs) &&
       startTs > 0 &&
       (endTs === null || (isFinite(endTs) && endTs >= startTs));
-    const isCustomRankingSort = hasCustomDateRange && (sort === '% Cust Date Chag' || sort === 'pctChange' || sort === 'netChange');
+
+    // View filter (gainers/losers/unchanged) — for Customize Date this is applied after custom values are computed.
+    const fullConditions = [...baseConditions];
+    if (!hasCustomDateRange) {
+      if (filter === 'gainers') fullConditions.push(`"netChange" > 0`);
+      else if (filter === 'losers') fullConditions.push(`"netChange" < 0`);
+      else if (filter === 'unchanged') fullConditions.push(`"netChange" = 0`);
+    }
+
+    const baseWhere = baseConditions.length > 0 ? `WHERE ${baseConditions.join(' AND ')}` : '';
+    const fullWhere = fullConditions.length > 0 ? `WHERE ${fullConditions.join(' AND ')}` : '';
     const orderClause = getSortClause(sort, order);
     const offset = (page - 1) * pageSize;
 
@@ -187,12 +189,13 @@ export async function GET(request: NextRequest) {
                 "displayName", "tradingSymbol", sector, industry, series, "faceValue",
                 "priceBand", "marketCapValue", "prevClose", "lastPrice", "netChange",
                 "pctChange", "percentChanges", "week52High", "week52Low", volume
-         FROM "LiveQuote" ${fullWhere} ${isCustomRankingSort ? '' : `ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`}`
+         FROM "LiveQuote" ${fullWhere} ${hasCustomDateRange ? '' : `ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`}`
       ),
     ]);
     let rows = fetchedRows;
+    let customCounts: { total: number; gainers: number; losers: number; unchanged: number } | null = null;
 
-    if (isCustomRankingSort && rows.length > 0) {
+    if (hasCustomDateRange && rows.length > 0) {
       const start = startTs as number;
       const end = endTs as number | null;
       const secIds = rows.map(r => parseInt(String(r.securityId))).filter(n => isFinite(n) && n > 0);
@@ -221,8 +224,7 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        rows = rows
-          .map((row) => {
+        const rowsWithCustomValues = rows.map((row) => {
             const entry = closeMap.get(`${row.securityId}:${row.exchangeSegment}`);
             const compareTo = end !== null ? entry?.end : Number(row.lastPrice);
             const customNetChange = entry && compareTo && compareTo > 0
@@ -233,13 +235,46 @@ export async function GET(request: NextRequest) {
               : null;
 
             return { ...row, customNetChange, customPctChange };
-          })
+          });
+
+        customCounts = {
+          total: rowsWithCustomValues.length,
+          gainers: rowsWithCustomValues.filter(row => Number(row.customPctChange) > 0).length,
+          losers: rowsWithCustomValues.filter(row => Number(row.customPctChange) < 0).length,
+          unchanged: rowsWithCustomValues.filter(row => row.customPctChange === 0).length,
+        };
+
+        const customFilteredRows = rowsWithCustomValues.filter((row) => {
+          if (filter === 'gainers') return Number(row.customPctChange) > 0;
+          if (filter === 'losers') return Number(row.customPctChange) < 0;
+          if (filter === 'unchanged') return row.customPctChange === 0;
+          return true;
+        });
+
+        const valueForSort = (row: Record<string, unknown>): string | number | null => {
+          if (sort === 'pctChange' || sort === '% Cust Date Chag') return row.customPctChange as number | null;
+          if (sort === 'netChange') return row.customNetChange as number | null;
+          if (sort === 'name') return row.displayName as string;
+          if (sort === 'lastPrice') return Number(row.lastPrice);
+          if (sort === 'prevClose') return Number(row.prevClose);
+          if (sort === 'marketCap') return Number(row.marketCapValue);
+          if (sort === 'volume') return Number(row.volume);
+
+          const percentChanges = row.percentChanges as Record<string, number | null> | null;
+          return percentChanges?.[sort] ?? null;
+        };
+
+        rows = customFilteredRows
           .sort((a, b) => {
-            const aValue = sort === 'netChange' ? a.customNetChange : a.customPctChange;
-            const bValue = sort === 'netChange' ? b.customNetChange : b.customPctChange;
+            const aValue = valueForSort(a);
+            const bValue = valueForSort(b);
             if (aValue == null && bValue == null) return 0;
             if (aValue == null) return 1;
             if (bValue == null) return -1;
+            if (typeof aValue === 'string' || typeof bValue === 'string') {
+              const result = String(aValue).localeCompare(String(bValue));
+              return order === 'asc' ? result : -result;
+            }
             return order === 'asc'
               ? Number(aValue) - Number(bValue)
               : Number(bValue) - Number(aValue);
@@ -252,10 +287,15 @@ export async function GET(request: NextRequest) {
 
     const counts = countsResult[0];
     const viewTotal = Number(
-      filter === 'gainers' ? counts.gainers :
-      filter === 'losers' ? counts.losers :
-      filter === 'unchanged' ? counts.unchanged :
-      counts.total
+      customCounts
+        ? filter === 'gainers' ? customCounts.gainers :
+          filter === 'losers' ? customCounts.losers :
+          filter === 'unchanged' ? customCounts.unchanged :
+          customCounts.total
+        : filter === 'gainers' ? counts.gainers :
+          filter === 'losers' ? counts.losers :
+          filter === 'unchanged' ? counts.unchanged :
+          counts.total
     );
     const totalStocks = viewTotal;
     const totalPages = Math.ceil(totalStocks / pageSize);
@@ -339,10 +379,10 @@ export async function GET(request: NextRequest) {
       pagination: { page, pageSize, totalStocks, totalPages },
       stats,
       filteredCounts: {
-        total: Number(counts.total),
-        gainers: Number(counts.gainers),
-        losers: Number(counts.losers),
-        unchanged: Number(counts.unchanged),
+        total: customCounts?.total ?? Number(counts.total),
+        gainers: customCounts?.gainers ?? Number(counts.gainers),
+        losers: customCounts?.losers ?? Number(counts.losers),
+        unchanged: customCounts?.unchanged ?? Number(counts.unchanged),
       },
       lastSyncAt: syncStatus.lastSyncAt,
       syncStatus: {

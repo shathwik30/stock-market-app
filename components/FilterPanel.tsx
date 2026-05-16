@@ -1,12 +1,10 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Plus } from 'lucide-react';
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
@@ -44,6 +42,17 @@ export const emptyFilters: FilterState = {
 export const emptyFilterOptions: FilterOptions = {
   sectors: [], industries: [], marketCaps: [], priceBands: [], series: [],
 };
+
+export interface AddColumnGroupOption {
+  id: string;
+  label: string;
+  items: { id: string; label: string }[];
+}
+
+export interface AddColumnSelection {
+  timeframe: boolean;
+  groups: Record<string, string[]>;
+}
 
 export function hasActiveFilters(f: FilterState): boolean {
   return f.sectors.length > 0 || f.industries.length > 0 || f.marketCaps.length > 0 ||
@@ -176,14 +185,19 @@ interface Props {
   onAddColumn?: (column: string) => void;
   selectedAddedColumnOptions?: string[];
   onAddedColumnOptionChange?: (option: string, checked: boolean) => void;
+  addColumnGroups?: AddColumnGroupOption[];
+  selectedAddColumnConfig?: AddColumnSelection;
+  onAddColumnConfigChange?: (config: AddColumnSelection) => void;
 }
 
 export default function FilterPanel({
   filters, options, onChange, onReset,
   hiddenColumns, onHiddenColumnsChange, toggleableColumns,
   addColumnOptions = [], onAddColumn, selectedAddedColumnOptions = [], onAddedColumnOptionChange,
+  addColumnGroups = [], selectedAddColumnConfig, onAddColumnConfigChange,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [addColumnView, setAddColumnView] = useState<string>('root');
   const activeCount = countActive(filters);
 
   const update = (key: keyof FilterState, value: string[] | string) => {
@@ -220,6 +234,36 @@ export default function FilterPanel({
     onHiddenColumnsChange(next);
   };
 
+  const selectedAddColumnCount = selectedAddColumnConfig
+    ? Object.values(selectedAddColumnConfig.groups).reduce((sum, values) => sum + values.length, selectedAddColumnConfig.timeframe ? 1 : 0)
+    : 0;
+
+  const toggleTimeframe = (checked: boolean) => {
+    if (!selectedAddColumnConfig || !onAddColumnConfigChange) return;
+    onAddColumnConfigChange({ ...selectedAddColumnConfig, timeframe: checked });
+  };
+
+  const toggleGroupItem = (groupId: string, itemId: string, checked: boolean) => {
+    if (!selectedAddColumnConfig || !onAddColumnConfigChange) return;
+    const current = selectedAddColumnConfig.groups[groupId] || [];
+    const nextItems = checked
+      ? current.includes(itemId) ? current : [...current, itemId]
+      : current.filter(id => id !== itemId);
+
+    onAddColumnConfigChange({
+      timeframe: checked ? true : selectedAddColumnConfig.timeframe,
+      groups: { ...selectedAddColumnConfig.groups, [groupId]: nextItems },
+    });
+  };
+
+  const setGroupItems = (groupId: string, itemIds: string[]) => {
+    if (!selectedAddColumnConfig || !onAddColumnConfigChange) return;
+    onAddColumnConfigChange({
+      timeframe: itemIds.length > 0 ? true : selectedAddColumnConfig.timeframe,
+      groups: { ...selectedAddColumnConfig.groups, [groupId]: itemIds },
+    });
+  };
+
   return (
     <div className="mb-3">
       {/* Toggle bar */}
@@ -236,7 +280,112 @@ export default function FilterPanel({
             </span>
           )}
         </button>
-        {(onAddColumn || onAddedColumnOptionChange) && addColumnOptions.length > 0 && (
+        {onAddColumnConfigChange && selectedAddColumnConfig && addColumnGroups.length > 0 ? (
+          <DropdownMenu onOpenChange={(open) => { if (!open) setAddColumnView('root'); }}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="relative flex h-7 w-7 items-center justify-center border border-black bg-white text-black hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-black"
+                aria-label="Add column"
+                title="Add column"
+              >
+                <Plus className="h-4 w-4" />
+                {selectedAddColumnCount > 0 && (
+                  <span className="absolute -right-2 -top-2 min-w-[18px] rounded-full bg-black px-1 text-[10px] font-bold leading-[18px] text-white">
+                    {selectedAddColumnCount}
+                  </span>
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-72 border-gray-300 bg-white p-0 text-black">
+              {addColumnView === 'root' ? (
+                <div>
+                  <label className="flex cursor-pointer items-center gap-2 border-b border-gray-200 px-3 py-2 text-sm hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={selectedAddColumnConfig.timeframe}
+                      onChange={(event) => toggleTimeframe(event.target.checked)}
+                      className="h-3.5 w-3.5 accent-black"
+                    />
+                    <span className="font-medium">Timeframe</span>
+                  </label>
+                  <div className="py-1">
+                    {addColumnGroups.map((group) => {
+                      const count = selectedAddColumnConfig.groups[group.id]?.length || 0;
+                      return (
+                        <button
+                          key={group.id}
+                          type="button"
+                          onClick={() => setAddColumnView(group.id)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        >
+                          <span className="flex-1">{group.label}</span>
+                          {count > 0 && (
+                            <span className="min-w-[18px] rounded-full bg-black px-1.5 text-center text-[10px] font-bold leading-[18px] text-white">
+                              {count}
+                            </span>
+                          )}
+                          <ChevronRight className="h-4 w-4 text-gray-500" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                (() => {
+                  const group = addColumnGroups.find(item => item.id === addColumnView);
+                  if (!group) return null;
+                  const selectedItems = selectedAddColumnConfig.groups[group.id] || [];
+                  return (
+                    <div>
+                      <div className="flex items-center gap-2 border-b border-gray-200 px-2 py-2">
+                        <button
+                          type="button"
+                          onClick={() => setAddColumnView('root')}
+                          className="flex h-7 w-7 items-center justify-center hover:bg-gray-100"
+                          aria-label="Back"
+                          title="Back"
+                        >
+                          <ArrowLeft className="h-4 w-4" />
+                        </button>
+                        <span className="text-sm font-semibold">{group.label}</span>
+                      </div>
+                      <div className="flex gap-3 border-b border-gray-200 px-3 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setGroupItems(group.id, group.items.map(item => item.id))}
+                          className="text-[11px] font-medium text-blue-600 hover:underline"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupItems(group.id, [])}
+                          className="text-[11px] font-medium text-red-600 hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto py-1">
+                        {group.items.map((item) => (
+                          <label key={item.id} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50">
+                            <input
+                              type="checkbox"
+                              checked={selectedItems.includes(item.id)}
+                              onChange={(event) => toggleGroupItem(group.id, item.id, event.target.checked)}
+                              className="h-3.5 w-3.5 accent-black"
+                            />
+                            <span className="truncate">{item.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (onAddColumn || onAddedColumnOptionChange) && addColumnOptions.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -248,26 +397,27 @@ export default function FilterPanel({
                 <Plus className="h-4 w-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64 border-gray-300 bg-white text-black">
+            <DropdownMenuContent align="start" className="w-64 border-gray-300 bg-white p-1 text-black">
               {addColumnOptions.map((option, index) => {
                 const checked = selectedAddedColumnOptions.includes(option);
                 return (
                   <div key={option}>
-                    {index === 1 && <DropdownMenuSeparator />}
-                    <DropdownMenuCheckboxItem
-                      checked={checked}
-                      onCheckedChange={(nextChecked) => {
-                        if (onAddedColumnOptionChange) {
-                          onAddedColumnOptionChange(option, Boolean(nextChecked));
-                          return;
-                        }
-                        if (onAddColumn) onAddColumn(option);
-                      }}
-                      onSelect={(event) => event.preventDefault()}
-                      className={`cursor-pointer text-sm ${index > 0 ? 'pl-10' : ''}`}
-                    >
-                      {option}
-                    </DropdownMenuCheckboxItem>
+                    {index === 1 && <div className="my-1 border-t border-gray-200" />}
+                    <label className={`flex cursor-pointer items-center gap-2 px-2 py-1.5 text-sm hover:bg-gray-50 ${index > 0 ? 'pl-10' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          if (onAddedColumnOptionChange) {
+                            onAddedColumnOptionChange(option, event.target.checked);
+                            return;
+                          }
+                          if (onAddColumn) onAddColumn(option);
+                        }}
+                        className="h-3.5 w-3.5 accent-black"
+                      />
+                      <span>{option}</span>
+                    </label>
                   </div>
                 );
               })}
