@@ -168,43 +168,12 @@ export async function GET(request: NextRequest) {
       isFinite(startTs) &&
       startTs > 0 &&
       (endTs === null || (isFinite(endTs) && endTs >= startTs));
-    const customCompareExpr = endTs !== null ? '"customEnd"."close"' : '"lastPrice"';
-    const customNetExpr = `CASE WHEN "customStart"."close" IS NOT NULL AND "customStart"."close" > 0 AND ${customCompareExpr} IS NOT NULL AND ${customCompareExpr} > 0 THEN (${customCompareExpr} - "customStart"."close") ELSE NULL END`;
-    const customPctExpr = `CASE WHEN "customStart"."close" IS NOT NULL AND "customStart"."close" > 0 AND ${customCompareExpr} IS NOT NULL AND ${customCompareExpr} > 0 THEN ((${customCompareExpr} - "customStart"."close") / "customStart"."close" * 100) ELSE NULL END`;
-    const customJoin = hasCustomDateRange
-      ? `LEFT JOIN LATERAL (
-           SELECT hp.closes[i] as "close"
-           FROM "HistoricalPrice" hp, generate_subscripts(hp.timestamps, 1) i
-           WHERE hp."securityId" = "LiveQuote"."securityId"
-             AND hp."exchangeSegment" = "LiveQuote"."exchangeSegment"
-             AND hp.timestamps[i] <= ${startTs}
-           ORDER BY hp.timestamps[i] DESC
-           LIMIT 1
-         ) "customStart" ON true
-         ${endTs !== null
-           ? `LEFT JOIN LATERAL (
-                SELECT hp.closes[i] as "close"
-                FROM "HistoricalPrice" hp, generate_subscripts(hp.timestamps, 1) i
-                WHERE hp."securityId" = "LiveQuote"."securityId"
-                  AND hp."exchangeSegment" = "LiveQuote"."exchangeSegment"
-                  AND hp.timestamps[i] <= ${endTs}
-                ORDER BY hp.timestamps[i] DESC
-                LIMIT 1
-              ) "customEnd" ON true`
-           : ''}`
-      : '';
-    const customSelect = hasCustomDateRange
-      ? `, ${customNetExpr} as "customNetChange", ${customPctExpr} as "customPctChange"`
-      : '';
-    const orderClause = getSortClause(
-      sort,
-      order,
-      hasCustomDateRange ? { pctExpr: customPctExpr, netExpr: customNetExpr } : undefined
-    );
+    const isCustomRankingSort = hasCustomDateRange && (sort === '% Cust Date Chag' || sort === 'pctChange' || sort === 'netChange');
+    const orderClause = getSortClause(sort, order);
     const offset = (page - 1) * pageSize;
 
     // ── Count breakdown (for tab labels) + fetch rows — in parallel ──
-    const [countsResult, rows] = await Promise.all([
+    const [countsResult, fetchedRows] = await Promise.all([
       // Single query gives total + per-category counts (without view filter)
       prisma.$queryRawUnsafe<[{ total: bigint; gainers: bigint; losers: bigint; unchanged: bigint }]>(
         `SELECT COUNT(*)::bigint AS total,
@@ -218,10 +187,81 @@ export async function GET(request: NextRequest) {
                 "displayName", "tradingSymbol", sector, industry, series, "faceValue",
                 "priceBand", "marketCapValue", "prevClose", "lastPrice", "netChange",
                 "pctChange", "percentChanges", "week52High", "week52Low", volume
-                ${customSelect}
-         FROM "LiveQuote" ${customJoin} ${fullWhere} ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`
+         FROM "LiveQuote" ${fullWhere} ${isCustomRankingSort ? '' : `ORDER BY ${orderClause} LIMIT ${pageSize} OFFSET ${offset}`}`
       ),
     ]);
+    let rows = fetchedRows;
+
+    if (isCustomRankingSort && rows.length > 0) {
+      const start = startTs as number;
+      const end = endTs as number | null;
+      const secIds = rows.map(r => parseInt(String(r.securityId))).filter(n => isFinite(n) && n > 0);
+
+      if (secIds.length > 0) {
+        const endSelect = end !== null
+          ? `(SELECT hp.closes[i]
+               FROM generate_subscripts(hp.timestamps, 1) i
+               WHERE hp.timestamps[i] <= ${end}
+               ORDER BY i DESC
+               LIMIT 1
+              ) as "endClose"`
+          : `NULL::double precision as "endClose"`;
+        const histRows = await prisma.$queryRawUnsafe<Array<{
+          securityId: number;
+          exchangeSegment: string;
+          startClose: number | null;
+          endClose: number | null;
+        }>>(`
+          SELECT hp."securityId", hp."exchangeSegment",
+            (SELECT hp.closes[i]
+             FROM generate_subscripts(hp.timestamps, 1) i
+             WHERE hp.timestamps[i] <= ${start}
+             ORDER BY i DESC
+             LIMIT 1
+            ) as "startClose",
+            ${endSelect}
+          FROM "HistoricalPrice" hp
+          WHERE hp."securityId" IN (${secIds.join(',')})
+        `);
+
+        const closeMap = new Map<string, { start: number; end: number | null }>();
+        for (const h of histRows) {
+          if (h.startClose != null && h.startClose > 0) {
+            closeMap.set(`${h.securityId}:${h.exchangeSegment}`, {
+              start: h.startClose,
+              end: h.endClose != null && h.endClose > 0 ? h.endClose : null,
+            });
+          }
+        }
+
+        rows = rows
+          .map((row) => {
+            const entry = closeMap.get(`${row.securityId}:${row.exchangeSegment}`);
+            const compareTo = end !== null ? entry?.end : Number(row.lastPrice);
+            const customNetChange = entry && compareTo && compareTo > 0
+              ? Math.round((compareTo - entry.start) * 100) / 100
+              : null;
+            const customPctChange = entry && compareTo && compareTo > 0
+              ? Math.round(((compareTo - entry.start) / entry.start) * 10000) / 100
+              : null;
+
+            return { ...row, customNetChange, customPctChange };
+          })
+          .sort((a, b) => {
+            const aValue = sort === 'netChange' ? a.customNetChange : a.customPctChange;
+            const bValue = sort === 'netChange' ? b.customNetChange : b.customPctChange;
+            if (aValue == null && bValue == null) return 0;
+            if (aValue == null) return 1;
+            if (bValue == null) return -1;
+            return order === 'asc'
+              ? Number(aValue) - Number(bValue)
+              : Number(bValue) - Number(aValue);
+          })
+          .slice(offset, offset + pageSize);
+      } else {
+        rows = rows.slice(offset, offset + pageSize);
+      }
+    }
 
     const counts = countsResult[0];
     const viewTotal = Number(
