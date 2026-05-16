@@ -42,6 +42,28 @@ const ADD_COLUMN_OPTIONS = [
   'Filterings',
 ];
 
+const TIMEFRAME_ADDON_COLUMNS = ['TF 15min Change', 'TF 1hour Change', 'TF 1day Change', 'TF 1week Change'];
+const TIMEFRAME_ADDON_PREFIXES = ['TF 15min', 'TF 1hour', 'TF 1day', 'TF 1week'];
+const TECHNICAL_ADDON_OPTIONS = ADD_COLUMN_OPTIONS.filter(option => option !== 'Timeframe');
+
+const buildAddedColumns = (selectedOptions: string[]): string[] => {
+  const selected = new Set(selectedOptions);
+  const columns: string[] = [];
+
+  if (selected.has('Timeframe')) {
+    columns.push(...TIMEFRAME_ADDON_COLUMNS);
+  }
+
+  TECHNICAL_ADDON_OPTIONS.forEach((option) => {
+    if (!selected.has(option)) return;
+    TIMEFRAME_ADDON_PREFIXES.forEach((prefix) => {
+      columns.push(`${prefix} ${option}`);
+    });
+  });
+
+  return columns;
+};
+
 // Calendar input helper for the Customize Date picker.
 const toDisplayDate = (d: Date): string => {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -367,7 +389,7 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
   const [filterOptions, setFilterOptions] = useState<FilterOptions>(emptyFilterOptions);
   const [filteredCounts, setFilteredCounts] = useState<{ total: number; gainers: number; losers: number; unchanged: number } | null>(null);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-  const [addedColumns, setAddedColumns] = useState<string[]>([]);
+  const [selectedAddedColumnOptions, setSelectedAddedColumnOptions] = useState<string[]>([]);
   const [customDate, setCustomDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [startDateInput, setStartDateInput] = useState('');
@@ -605,8 +627,13 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
     setCurrentPage(1);
   };
 
-  const handleAddColumn = (column: string) => {
-    setAddedColumns((current) => current.includes(column) ? current : [...current, column]);
+  const addedColumns = buildAddedColumns(selectedAddedColumnOptions);
+
+  const handleAddedColumnOptionChange = (option: string, checked: boolean) => {
+    setSelectedAddedColumnOptions((current) => {
+      if (checked) return current.includes(option) ? current : [...current, option];
+      return current.filter((item) => item !== option);
+    });
   };
 
   // CSV Download (respects column visibility)
@@ -1003,7 +1030,8 @@ function MarketPageContent({ enableAddColumns = false }: { enableAddColumns?: bo
           onHiddenColumnsChange={setHiddenColumns}
           toggleableColumns={toggleableColumnsForTab}
           addColumnOptions={enableAddColumns ? ADD_COLUMN_OPTIONS : undefined}
-          onAddColumn={enableAddColumns ? handleAddColumn : undefined}
+          selectedAddedColumnOptions={enableAddColumns ? selectedAddedColumnOptions : undefined}
+          onAddedColumnOptionChange={enableAddColumns ? handleAddedColumnOptionChange : undefined}
         />
 
         {/* Loading State */}

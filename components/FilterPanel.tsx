@@ -4,8 +4,9 @@ import { useState, useRef, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
@@ -173,12 +174,14 @@ interface Props {
   toggleableColumns: string[];
   addColumnOptions?: string[];
   onAddColumn?: (column: string) => void;
+  selectedAddedColumnOptions?: string[];
+  onAddedColumnOptionChange?: (option: string, checked: boolean) => void;
 }
 
 export default function FilterPanel({
   filters, options, onChange, onReset,
   hiddenColumns, onHiddenColumnsChange, toggleableColumns,
-  addColumnOptions = [], onAddColumn,
+  addColumnOptions = [], onAddColumn, selectedAddedColumnOptions = [], onAddedColumnOptionChange,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const activeCount = countActive(filters);
@@ -233,7 +236,7 @@ export default function FilterPanel({
             </span>
           )}
         </button>
-        {onAddColumn && addColumnOptions.length > 0 && (
+        {(onAddColumn || onAddedColumnOptionChange) && addColumnOptions.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -245,16 +248,29 @@ export default function FilterPanel({
                 <Plus className="h-4 w-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 border-gray-300 bg-white text-black">
-              {addColumnOptions.map((option) => (
-                <DropdownMenuItem
-                  key={option}
-                  className="cursor-pointer text-sm"
-                  onClick={() => onAddColumn(option)}
-                >
-                  {option}
-                </DropdownMenuItem>
-              ))}
+            <DropdownMenuContent align="start" className="w-64 border-gray-300 bg-white text-black">
+              {addColumnOptions.map((option, index) => {
+                const checked = selectedAddedColumnOptions.includes(option);
+                return (
+                  <div key={option}>
+                    {index === 1 && <DropdownMenuSeparator />}
+                    <DropdownMenuCheckboxItem
+                      checked={checked}
+                      onCheckedChange={(nextChecked) => {
+                        if (onAddedColumnOptionChange) {
+                          onAddedColumnOptionChange(option, Boolean(nextChecked));
+                          return;
+                        }
+                        if (onAddColumn) onAddColumn(option);
+                      }}
+                      onSelect={(event) => event.preventDefault()}
+                      className={`cursor-pointer text-sm ${index > 0 ? 'pl-10' : ''}`}
+                    >
+                      {option}
+                    </DropdownMenuCheckboxItem>
+                  </div>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
