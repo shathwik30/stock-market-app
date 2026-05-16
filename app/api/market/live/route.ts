@@ -198,38 +198,43 @@ export async function GET(request: NextRequest) {
       const secIds = rows.map(r => parseInt(String(r.securityId))).filter(n => isFinite(n) && n > 0);
 
       if (secIds.length > 0) {
-        const endSelect = end !== null
-          ? `(SELECT hp.closes[i]
-               FROM generate_subscripts(hp.timestamps, 1) i
-               WHERE hp.timestamps[i] <= ${end}
-               ORDER BY i DESC
-               LIMIT 1
-              ) as "endClose"`
-          : `NULL::double precision as "endClose"`;
         const histRows = await prisma.$queryRawUnsafe<Array<{
           securityId: number;
           exchangeSegment: string;
-          startClose: number | null;
-          endClose: number | null;
+          timestamps: number[];
+          closes: number[];
         }>>(`
-          SELECT hp."securityId", hp."exchangeSegment",
-            (SELECT hp.closes[i]
-             FROM generate_subscripts(hp.timestamps, 1) i
-             WHERE hp.timestamps[i] <= ${start}
-             ORDER BY i DESC
-             LIMIT 1
-            ) as "startClose",
-            ${endSelect}
+          SELECT hp."securityId", hp."exchangeSegment", hp.timestamps, hp.closes
           FROM "HistoricalPrice" hp
           WHERE hp."securityId" IN (${secIds.join(',')})
         `);
 
+        const closeAtOrBefore = (timestamps: number[], closes: number[], target: number): number | null => {
+          let lo = 0;
+          let hi = timestamps.length - 1;
+          let best = -1;
+
+          while (lo <= hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (timestamps[mid] <= target) {
+              best = mid;
+              lo = mid + 1;
+            } else {
+              hi = mid - 1;
+            }
+          }
+
+          const close = best >= 0 ? closes[best] : null;
+          return close != null && close > 0 ? close : null;
+        };
+
         const closeMap = new Map<string, { start: number; end: number | null }>();
         for (const h of histRows) {
-          if (h.startClose != null && h.startClose > 0) {
+          const startClose = closeAtOrBefore(h.timestamps || [], h.closes || [], start);
+          if (startClose != null && startClose > 0) {
             closeMap.set(`${h.securityId}:${h.exchangeSegment}`, {
-              start: h.startClose,
-              end: h.endClose != null && h.endClose > 0 ? h.endClose : null,
+              start: startClose,
+              end: end !== null ? closeAtOrBefore(h.timestamps || [], h.closes || [], end) : null,
             });
           }
         }
