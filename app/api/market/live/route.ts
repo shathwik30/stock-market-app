@@ -201,40 +201,22 @@ export async function GET(request: NextRequest) {
         const histRows = await prisma.$queryRawUnsafe<Array<{
           securityId: number;
           exchangeSegment: string;
-          timestamps: number[];
-          closes: number[];
+          startClose: number | null;
+          endClose: number | null;
         }>>(`
-          SELECT hp."securityId", hp."exchangeSegment", hp.timestamps, hp.closes
+          SELECT hp."securityId", hp."exchangeSegment",
+            close_at_or_before(hp.timestamps, hp.closes, ${start}) as "startClose",
+            ${end !== null ? `close_at_or_before(hp.timestamps, hp.closes, ${end})` : 'NULL::double precision'} as "endClose"
           FROM "HistoricalPrice" hp
           WHERE hp."securityId" IN (${secIds.join(',')})
         `);
 
-        const closeAtOrBefore = (timestamps: number[], closes: number[], target: number): number | null => {
-          let lo = 0;
-          let hi = timestamps.length - 1;
-          let best = -1;
-
-          while (lo <= hi) {
-            const mid = Math.floor((lo + hi) / 2);
-            if (timestamps[mid] <= target) {
-              best = mid;
-              lo = mid + 1;
-            } else {
-              hi = mid - 1;
-            }
-          }
-
-          const close = best >= 0 ? closes[best] : null;
-          return close != null && close > 0 ? close : null;
-        };
-
         const closeMap = new Map<string, { start: number; end: number | null }>();
         for (const h of histRows) {
-          const startClose = closeAtOrBefore(h.timestamps || [], h.closes || [], start);
-          if (startClose != null && startClose > 0) {
+          if (h.startClose != null && h.startClose > 0) {
             closeMap.set(`${h.securityId}:${h.exchangeSegment}`, {
-              start: startClose,
-              end: end !== null ? closeAtOrBefore(h.timestamps || [], h.closes || [], end) : null,
+              start: h.startClose,
+              end: h.endClose != null && h.endClose > 0 ? h.endClose : null,
             });
           }
         }
